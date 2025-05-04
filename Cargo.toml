@@ -3,3 +3,7 @@ resolver = "2"
 members = [
   "board-generator"
 ]
+
+[workspace.dependencies]
+opencv = "0.94"
+vcpkg = "0.2"
