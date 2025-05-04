@@ -1,0 +1,2 @@
+[env]
+OPENCV_DISABLE_PROBES="pkg_config,cmake"

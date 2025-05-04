@@ -7,3 +7,4 @@ members = [
 [workspace.dependencies]
 opencv = "0.94"
 vcpkg = "0.2"
+clap = { version = "4", features = ["derive"] }
