@@ -1,2 +1,5 @@
 [workspace]
 resolver = "2"
+members = [
+  "board-generator"
+]
