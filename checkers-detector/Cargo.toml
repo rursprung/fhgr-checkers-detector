@@ -3,4 +3,13 @@ name = "checkers-detector"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["resolve_opencv_with_vcpkg"]
+resolve_opencv_with_vcpkg = ["dep:vcpkg"]
+
 [dependencies]
+opencv.workspace = true
+clap.workspace = true
+
+[build-dependencies]
+vcpkg = { workspace = true, optional = true }
