@@ -21,6 +21,7 @@ use opencv::{
     videoio::VideoCapture,
 };
 use std::fmt::{Display, Formatter};
+use log::debug;
 use url::Url;
 
 #[derive(Copy, Clone, Debug, clap::ValueEnum)]
@@ -134,8 +135,14 @@ fn handle_video_input(config: &Config) -> Result<()> {
     };
 
     let mut capture = match video_input.parse::<i32>() {
-        Ok(i) => VideoCapture::new_def(i),
-        Err(_) => VideoCapture::from_file_def(&video_input),
+        Ok(i) => {
+            debug!("opening ID based video capture {}", i);
+            VideoCapture::new_def(i)
+        },
+        Err(_) => {
+            debug!("opening path or URL based video capture {}", video_input);
+            VideoCapture::from_file_def(&video_input)
+        },
     }
     .map_err(|e| ImageAcquisitionFailure(Some(e)))?;
     if !capture
@@ -161,6 +168,8 @@ fn handle_video_input(config: &Config) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    env_logger::init();
+
     let config = Config::parse();
 
     if let Some(ref image_input) = config.input.image_input {

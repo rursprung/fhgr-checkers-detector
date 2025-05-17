@@ -2,6 +2,7 @@
 
 #![deny(missing_docs)]
 
+use log::debug;
 use url::Url;
 
 /// Represents an ESP32-CAM.
@@ -20,6 +21,7 @@ impl Esp32Cam {
 
     /// Set the required parameters on the ESP32-CAM to acquire images as needed by the application.
     pub fn init(base_url: &Url) {
+        debug!("ESP32-CAM: setting max. resolution & quality");
         Self::set_max_resolution(base_url);
         Self::set_max_quality(base_url);
     }

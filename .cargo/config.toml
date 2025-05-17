@@ -1,2 +1,4 @@
 [env]
 OPENCV_DISABLE_PROBES="pkg_config,cmake"
+
+RUST_LOG="debug"

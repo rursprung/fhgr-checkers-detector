@@ -12,6 +12,8 @@ opencv.workspace = true
 clap.workspace = true
 url.workspace = true
 reqwest.workspace = true
+log.workspace = true
+env_logger.workspace = true
 
 [build-dependencies]
 vcpkg = { workspace = true, optional = true }
