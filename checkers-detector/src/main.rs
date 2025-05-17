@@ -7,6 +7,9 @@
 #![deny(missing_debug_implementations)]
 #![deny(unused)]
 
+mod camera_control;
+
+use crate::camera_control::Esp32Cam;
 use DetectorError::*;
 use clap::Parser;
 use opencv::{
@@ -18,6 +21,12 @@ use opencv::{
     videoio::VideoCapture,
 };
 use std::fmt::{Display, Formatter};
+use url::Url;
+
+#[derive(Copy, Clone, Debug, clap::ValueEnum)]
+enum CameraType {
+    Esp32Cam,
+}
 
 #[derive(Debug, Clone, clap::Args)]
 #[group(required = true, multiple = false)]
@@ -38,10 +47,15 @@ struct Config {
     /// Defines the input to be used.
     #[clap(flatten)]
     input: InputConfig,
+    /// The type of the camera which is being accessed.
+    #[arg(short, long, value_enum, requires = "video_input")]
+    camera_type: Option<CameraType>,
 }
 
 #[derive(Debug)]
 enum DetectorError {
+    UrlParseError(url::ParseError),
+    UrlMustBeBaseUrl(String, String),
     ImageAcquisitionFailure(Option<opencv::Error>),
     OtherOpenCVError(opencv::Error),
 }
@@ -49,6 +63,12 @@ enum DetectorError {
 impl Display for DetectorError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
+            UrlParseError(_) => write!(f, "Url parse error"),
+            UrlMustBeBaseUrl(url, expected_base_url) => write!(
+                f,
+                "Camera URLs do not match! expected {} but got {}",
+                expected_base_url, url
+            ),
             ImageAcquisitionFailure(_) => write!(f, "image acquisition failed"),
             OtherOpenCVError(_) => write!(f, "Generic OpenCV Error"),
         }
@@ -58,10 +78,17 @@ impl Display for DetectorError {
 impl std::error::Error for DetectorError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            UrlParseError(e) => Some(e),
             ImageAcquisitionFailure(Some(e)) => Some(e),
             OtherOpenCVError(e) => Some(e),
             _ => None,
         }
+    }
+}
+
+impl From<url::ParseError> for DetectorError {
+    fn from(e: url::ParseError) -> Self {
+        UrlParseError(e)
     }
 }
 
@@ -87,7 +114,25 @@ where
 }
 
 /// Tries to open the specified video input and stream it while it lasts.
-fn handle_video_input(video_input: &str, config: &Config) -> Result<()> {
+fn handle_video_input(config: &Config) -> Result<()> {
+    let video_input = config.input.video_input.as_ref().unwrap();
+
+    let video_input = match config.camera_type {
+        Some(CameraType::Esp32Cam) => {
+            let url = Url::parse(video_input).unwrap();
+            let base_url = Url::parse(format!("http://{}", url.host().unwrap()).as_str()).unwrap();
+            if url != base_url {
+                return Err(UrlMustBeBaseUrl(url.to_string(), base_url.to_string()));
+            }
+
+            Esp32Cam::init(&base_url);
+
+            let stream_url = format!("http://{}:81/stream", base_url.host().unwrap());
+            stream_url
+        }
+        _ => video_input.to_string(),
+    };
+
     let mut capture = match video_input.parse::<i32>() {
         Ok(i) => VideoCapture::new_def(i),
         Err(_) => VideoCapture::from_file_def(&video_input),
@@ -122,8 +167,10 @@ fn main() -> Result<()> {
         let image = imread_def(image_input).map_err(|e| ImageAcquisitionFailure(Some(e)))?;
         handle_frame(&image, &config)?;
         wait_key_def()?;
-    } else if let Some(ref video_input) = config.input.video_input {
-        handle_video_input(video_input, &config)?;
+    } else if config.input.video_input.is_some() {
+        handle_video_input(&config)?;
+    } else {
+        unreachable!("clap must ensure that either image_input or video_input is set!");
     }
 
     Ok(())
