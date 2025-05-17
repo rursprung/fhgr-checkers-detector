@@ -1,15 +1,18 @@
+use GeneratorError::{InvalidConfig, OpenCVError};
 use clap::Parser;
 use opencv::{
-    core::{Point2i, Rect2i, Scalar, CV_8UC3},
+    core::Size,
+    core::{CV_8UC3, Point2i, Rect2i, Scalar},
     highgui,
     imgcodecs::imwrite_def,
-    imgproc::{cvt_color_def, get_text_size, put_text, COLOR_GRAY2BGR, FONT_HERSHEY_SIMPLEX, LINE_AA},
+    imgproc::{
+        COLOR_GRAY2BGR, FONT_HERSHEY_SIMPLEX, INTER_LINEAR, LINE_AA, cvt_color_def, get_text_size,
+        put_text, resize,
+    },
     objdetect::PredefinedDictionaryType::DICT_4X4_50,
     prelude::*,
 };
 use std::fmt::{Display, Formatter};
-use GeneratorError::{InvalidConfig, OpenCVError};
-
 
 #[derive(Debug)]
 pub enum GeneratorError {
@@ -26,26 +29,29 @@ impl From<opencv::Error> for GeneratorError {
 impl Display for GeneratorError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            OpenCVError(_) => writeln!(f, "OpenCV internal error"),
+            OpenCVError(_) => write!(f, "OpenCV internal error"),
             InvalidConfig => write!(f, "Invalid configuration specified"),
         }
     }
 }
 
-impl std::error::Error for GeneratorError {}
+impl std::error::Error for GeneratorError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            OpenCVError(err) => Some(err),
+            _ => None,
+        }
+    }
+}
 
 pub type Result<T> = std::result::Result<T, GeneratorError>;
 
 const COLOR_WHITE: Scalar = Scalar::new(255.0, 255.0, 255.0, 0.0);
 const COLOR_RED: Scalar = Scalar::new(0.0, 0.0, 255.0, 0.0);
 const COLOR_GREEN: Scalar = Scalar::new(0.0, 255.0, 0.0, 0.0);
+const COLOR_ELECTRIC_BLUE: Scalar = Scalar::new(255.0, 255.0, 128.0, 0.0);
 
-
-fn draw_aruco_marker<M>(
-    marker_id: i32,
-    img_view: &mut M,
-    config: &Config,
-) -> Result<()>
+fn draw_aruco_marker<M>(marker_id: i32, img_view: &mut M, config: &Config) -> Result<()>
 where
     M: MatTrait + opencv::core::ToOutputArray + opencv::core::ToInputArray,
 {
@@ -75,11 +81,7 @@ where
     Ok(())
 }
 
-
-fn draw_aruco_markers<M>(
-    image: &mut M,
-    config: &Config,
-) -> Result<()>
+fn draw_aruco_markers<M>(image: &mut M, config: &Config) -> Result<()>
 where
     M: MatTrait + opencv::core::ToOutputArray + opencv::core::ToInputArray,
 {
@@ -105,7 +107,9 @@ where
     draw_aruco_marker(
         1,
         &mut image.roi_mut(Rect2i::new(
-            config.image_edge_length_in_px() - marker_edge_length_in_px - distance_from_image_edge_in_px,
+            config.image_edge_length_in_px()
+                - marker_edge_length_in_px
+                - distance_from_image_edge_in_px,
             distance_from_image_edge_in_px,
             marker_edge_length_in_px,
             marker_edge_length_in_px,
@@ -116,8 +120,12 @@ where
     draw_aruco_marker(
         2,
         &mut image.roi_mut(Rect2i::new(
-            config.image_edge_length_in_px() - marker_edge_length_in_px - distance_from_image_edge_in_px,
-            config.image_edge_length_in_px() - marker_edge_length_in_px - distance_from_image_edge_in_px,
+            config.image_edge_length_in_px()
+                - marker_edge_length_in_px
+                - distance_from_image_edge_in_px,
+            config.image_edge_length_in_px()
+                - marker_edge_length_in_px
+                - distance_from_image_edge_in_px,
             marker_edge_length_in_px,
             marker_edge_length_in_px,
         ))?,
@@ -128,7 +136,9 @@ where
         3,
         &mut image.roi_mut(Rect2i::new(
             distance_from_image_edge_in_px,
-            config.image_edge_length_in_px() - marker_edge_length_in_px - distance_from_image_edge_in_px,
+            config.image_edge_length_in_px()
+                - marker_edge_length_in_px
+                - distance_from_image_edge_in_px,
             marker_edge_length_in_px,
             marker_edge_length_in_px,
         ))?,
@@ -138,11 +148,7 @@ where
     Ok(())
 }
 
-fn draw_labels_vertically<M>(
-    img: &mut M,
-    config: &Config,
-    column_center: i32,
-) -> Result<()>
+fn draw_labels_vertically<M>(img: &mut M, config: &Config, column_center: i32) -> Result<()>
 where
     M: MatTrait + opencv::core::ToInputOutputArray,
 {
@@ -151,7 +157,7 @@ where
     let thickness = 2;
 
     for row in 0..config.num_fields_per_line as i32 {
-        let text = char::from('A' as u8 + row as u8).to_string();
+        let text = char::from(b'A' + row as u8).to_string();
         let text = text.as_str();
         let mut baseline = 0;
         let text_size = get_text_size(text, font_face, font_scale, thickness, &mut baseline)?;
@@ -168,7 +174,7 @@ where
             ),
             font_face,
             font_scale,
-            Scalar::all(0.0),
+            COLOR_RED,
             thickness,
             LINE_AA,
             false,
@@ -178,11 +184,7 @@ where
     Ok(())
 }
 
-fn draw_labels_horizontally<M>(
-    img: &mut M,
-    config: &Config,
-    row_bottom: i32,
-) -> Result<()>
+fn draw_labels_horizontally<M>(img: &mut M, config: &Config, row_bottom: i32) -> Result<()>
 where
     M: MatTrait + opencv::core::ToInputOutputArray,
 {
@@ -191,7 +193,7 @@ where
     let thickness = 2;
 
     for column in 0..config.num_fields_per_line as i32 {
-        let text = char::from('1' as u8 + column as u8).to_string();
+        let text = char::from(b'1' + column as u8).to_string();
         let text = text.as_str();
         let mut baseline = 0;
         let text_size = get_text_size(text, font_face, font_scale, thickness, &mut baseline)?;
@@ -202,12 +204,12 @@ where
                 2 * config.field_edge_length_in_px as i32
                     + (column * config.field_edge_length_in_px as i32)
                     + config.field_edge_length_in_px as i32 / 2
-                - text_size.width / 2,
+                    - text_size.width / 2,
                 row_bottom + text_size.height / 2,
             ),
             font_face,
             font_scale,
-            Scalar::all(0.0),
+            COLOR_RED,
             thickness,
             LINE_AA,
             false,
@@ -217,10 +219,41 @@ where
     Ok(())
 }
 
-fn draw_labels<M>(
-    img: &mut M,
-    config: &Config,
-) -> Result<()>
+fn draw_label_background<M>(img: &mut M, config: &Config) -> Result<()>
+where
+    M: MatTrait + opencv::core::ToInputOutputArray,
+{
+    assert_eq!(img.size()?.height, img.size()?.width);
+    let l = img.size()?.height;
+
+    let label_background_color = &COLOR_ELECTRIC_BLUE;
+    let field_edge_length_in_px = config.field_edge_length_in_px as i32;
+    // left
+    let mut roi = img.roi_mut(Rect2i::new(0, 0, field_edge_length_in_px, l))?;
+    roi.set_to_def(label_background_color)?;
+    // right
+    let mut roi = img.roi_mut(Rect2i::new(
+        l - field_edge_length_in_px,
+        0,
+        field_edge_length_in_px,
+        l,
+    ))?;
+    roi.set_to_def(label_background_color)?;
+    // top
+    let mut roi = img.roi_mut(Rect2i::new(0, 0, l, field_edge_length_in_px))?;
+    roi.set_to_def(label_background_color)?;
+    // bottom
+    let mut roi = img.roi_mut(Rect2i::new(
+        0,
+        l - field_edge_length_in_px,
+        l,
+        field_edge_length_in_px,
+    ))?;
+    roi.set_to_def(label_background_color)?;
+    Ok(())
+}
+
+fn draw_labels<M>(img: &mut M, config: &Config) -> Result<()>
 where
     M: MatTrait + opencv::core::ToInputOutputArray,
 {
@@ -228,28 +261,38 @@ where
     draw_labels_vertically(
         img,
         config,
-        config.distance_from_image_edge_in_px as i32 + config.field_edge_length_in_px as i32 + config.field_edge_length_in_px as i32 / 2,
+        config.distance_from_image_edge_in_px as i32
+            + config.field_edge_length_in_px as i32
+            + config.field_edge_length_in_px as i32 / 2,
     )?;
 
     // right
     draw_labels_vertically(
         img,
         config,
-        config.image_edge_length_in_px() - config.distance_from_image_edge_in_px as i32 - config.field_edge_length_in_px as i32 - config.field_edge_length_in_px as i32 / 2,
+        config.image_edge_length_in_px()
+            - config.distance_from_image_edge_in_px as i32
+            - config.field_edge_length_in_px as i32
+            - config.field_edge_length_in_px as i32 / 2,
     )?;
 
     // top
     draw_labels_horizontally(
         img,
         config,
-        config.distance_from_image_edge_in_px as i32 + config.field_edge_length_in_px as i32 + config.field_edge_length_in_px as i32 / 2,
+        config.distance_from_image_edge_in_px as i32
+            + config.field_edge_length_in_px as i32
+            + config.field_edge_length_in_px as i32 / 2,
     )?;
 
     // bottom
     draw_labels_horizontally(
         img,
         config,
-        config.image_edge_length_in_px() - config.distance_from_image_edge_in_px as i32 - config.field_edge_length_in_px as i32 - config.field_edge_length_in_px as i32 / 2,
+        config.image_edge_length_in_px()
+            - config.distance_from_image_edge_in_px as i32
+            - config.field_edge_length_in_px as i32
+            - config.field_edge_length_in_px as i32 / 2,
     )?;
 
     Ok(())
@@ -266,7 +309,8 @@ where
     let mut field_type_a = true;
 
     if img_view.size()?.width != num_fields * field_edge_length_in_px
-        || img_view.size()?.height != num_fields * field_edge_length_in_px {
+        || img_view.size()?.height != num_fields * field_edge_length_in_px
+    {
         panic!(
             "invalid image view, expected {}✕{} but got {}✕{}",
             num_fields * field_edge_length_in_px,
@@ -278,11 +322,7 @@ where
 
     for row in 0..num_fields {
         for col in 0..num_fields {
-            let color = if field_type_a {
-                COLOR_GREEN
-            } else {
-                COLOR_RED
-            };
+            let color = if field_type_a { COLOR_GREEN } else { COLOR_RED };
 
             let mut roi = img_view.roi_mut(Rect2i::new(
                 row * field_edge_length_in_px,
@@ -316,23 +356,29 @@ pub fn generate_board(config: &Config) -> Result<Mat> {
 
     draw_chessboard(
         &mut image.roi_mut(Rect2i::new(
-            config.distance_from_image_edge_in_px as i32 + 2 * config.field_edge_length_in_px as i32,
-            config.distance_from_image_edge_in_px as i32 + 2 * config.field_edge_length_in_px as i32,
+            config.distance_from_image_edge_in_px as i32
+                + 2 * config.field_edge_length_in_px as i32,
+            config.distance_from_image_edge_in_px as i32
+                + 2 * config.field_edge_length_in_px as i32,
             config.chessboard_edge_length_in_px(),
             config.chessboard_edge_length_in_px(),
         ))?,
         config,
     )?;
 
-    draw_labels(
-        &mut image,
+    draw_label_background(
+        &mut image.roi_mut(Rect2i::new(
+            config.distance_from_image_edge_in_px as i32 + config.field_edge_length_in_px as i32,
+            config.distance_from_image_edge_in_px as i32 + config.field_edge_length_in_px as i32,
+            config.chessboard_edge_length_in_px() + 2 * config.field_edge_length_in_px as i32,
+            config.chessboard_edge_length_in_px() + 2 * config.field_edge_length_in_px as i32,
+        ))?,
         config,
     )?;
 
-    draw_aruco_markers(
-        &mut image,
-        config,
-    )?;
+    draw_labels(&mut image, config)?;
+
+    draw_aruco_markers(&mut image, config)?;
 
     Ok(image)
 }
@@ -369,17 +415,30 @@ impl Config {
 fn main() -> Result<()> {
     let config = Config::parse();
 
-    println!("Generating {}✕{} board with {}px wide fields", config.num_fields_per_line, config.num_fields_per_line, config.field_edge_length_in_px);
+    println!(
+        "Generating {}✕{} board with {}px wide fields",
+        config.num_fields_per_line, config.num_fields_per_line, config.field_edge_length_in_px
+    );
 
     let image = generate_board(&config)?;
 
-    highgui::imshow("Board", &image)?;
-    highgui::wait_key_def()?;
+    let mut image_out = Mat::default();
+    resize(
+        &image,
+        &mut image_out,
+        Size::default(),
+        0.5,
+        0.5,
+        INTER_LINEAR,
+    )?;
+    highgui::imshow("Board", &image_out)?;
+    let key = highgui::wait_key_def()?;
 
-    if let Some(output_file) = config.output_file {
-        imwrite_def(output_file.to_str().unwrap(), &image)?;
+    if key == 's' as i32 {
+        if let Some(output_file) = config.output_file {
+            imwrite_def(output_file.to_str().unwrap(), &image)?;
+        }
     }
-
 
     Ok(())
 }
