@@ -7,11 +7,15 @@
 #![deny(missing_debug_implementations)]
 #![deny(unused)]
 
+mod board_extractor;
 mod camera_control;
 
+use crate::board_extractor::BoardExtractorError::OpenCVError;
+use crate::board_extractor::{BoardExtractorError, extract_board};
 use crate::camera_control::Esp32Cam;
 use DetectorError::*;
 use clap::Parser;
+use log::{debug, warn};
 use opencv::{
     core::{Size, ToInputArray, ToOutputArray},
     highgui::{imshow, wait_key, wait_key_def},
@@ -21,8 +25,10 @@ use opencv::{
     videoio::VideoCapture,
 };
 use std::fmt::{Display, Formatter};
-use log::debug;
 use url::Url;
+
+/// Defines a fixed length for the edge of a field in the rectified image
+const PX_PER_FIELD_EDGE: u8 = 128;
 
 #[derive(Copy, Clone, Debug, clap::ValueEnum)]
 enum CameraType {
@@ -59,6 +65,7 @@ enum DetectorError {
     UrlMustBeBaseUrl(String, String),
     ImageAcquisitionFailure(Option<opencv::Error>),
     OtherOpenCVError(opencv::Error),
+    BoardNotFound,
 }
 
 impl Display for DetectorError {
@@ -72,6 +79,10 @@ impl Display for DetectorError {
             ),
             ImageAcquisitionFailure(_) => write!(f, "image acquisition failed"),
             OtherOpenCVError(_) => write!(f, "Generic OpenCV Error"),
+            BoardNotFound => write!(
+                f,
+                "Board not found in image. Are all aruco markers in view?"
+            ),
         }
     }
 }
@@ -93,6 +104,14 @@ impl From<url::ParseError> for DetectorError {
     }
 }
 
+impl From<BoardExtractorError> for DetectorError {
+    fn from(e: BoardExtractorError) -> Self {
+        match e {
+            OpenCVError(e) => OtherOpenCVError(e),
+        }
+    }
+}
+
 /// Default to [`OtherOpenCVError`] unless `map_err` is used explicitly.
 impl From<opencv::Error> for DetectorError {
     fn from(e: opencv::Error) -> Self {
@@ -103,12 +122,25 @@ impl From<opencv::Error> for DetectorError {
 type Result<T> = std::result::Result<T, DetectorError>;
 
 /// Handle an individual frame.
-fn handle_frame<M>(frame: &M, _config: &Config) -> Result<()>
+fn handle_frame<M>(frame: &M, config: &Config) -> Result<()>
 where
     M: MatTrait + ToOutputArray + ToInputArray,
 {
+    let board = extract_board(
+        frame,
+        &board_extractor::Config {
+            num_fields_per_line: config.num_fields_per_line,
+            px_per_field_edge: PX_PER_FIELD_EDGE,
+        },
+    )?;
+    if board.is_none() {
+        warn!("failed to find board! skipping frame");
+        return Err(BoardNotFound);
+    }
+    let board = board.unwrap();
+
     let mut out = Mat::default();
-    resize(frame, &mut out, Size::default(), 0.5, 0.5, INTER_LINEAR)?;
+    resize(&board, &mut out, Size::default(), 0.5, 0.5, INTER_LINEAR)?;
     imshow("board", &out)?;
 
     Ok(())
@@ -138,11 +170,11 @@ fn handle_video_input(config: &Config) -> Result<()> {
         Ok(i) => {
             debug!("opening ID based video capture {}", i);
             VideoCapture::new_def(i)
-        },
+        }
         Err(_) => {
             debug!("opening path or URL based video capture {}", video_input);
             VideoCapture::from_file_def(&video_input)
-        },
+        }
     }
     .map_err(|e| ImageAcquisitionFailure(Some(e)))?;
     if !capture
@@ -158,7 +190,10 @@ fn handle_video_input(config: &Config) -> Result<()> {
             .read(&mut image)
             .map_err(|e| ImageAcquisitionFailure(Some(e)))?;
 
-        handle_frame(&image, config)?;
+        match handle_frame(&image, config) {
+            Ok(_) | Err(BoardNotFound) => {}
+            Err(e) => return Err(e),
+        }
 
         let key = wait_key(1)?;
         if key == 'q' as i32 {
