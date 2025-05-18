@@ -13,15 +13,18 @@ mod detector;
 
 use crate::board_extractor::{BoardExtractorError, Config as BoardExtractorConfig, extract_board};
 use crate::camera_control::Esp32Cam;
-use crate::detector::{CalibratedDetector, Config as DetectorConfig, DebugFieldConfig, Detector};
+use crate::detector::{
+    BoardLayout, CalibratedDetector, Config as DetectorConfig, DebugFieldConfig, Detector,
+    FieldOccupancy,
+};
 use DetectorError::*;
 use clap::Parser;
 use log::{debug, warn};
 use opencv::{
-    core::{Point2i, Scalar, Size, ToInputArray, ToOutputArray},
+    core::{Point2i, Scalar, Size, ToInputArray, ToInputOutputArray, ToOutputArray},
     highgui::{imshow, wait_key, wait_key_def},
     imgcodecs::imread_def,
-    imgproc::{INTER_LINEAR, LINE_8, line, resize},
+    imgproc::{FONT_HERSHEY_COMPLEX, INTER_LINEAR, LINE_8, line, put_text_def, resize},
     prelude::*,
     videoio::VideoCapture,
 };
@@ -193,7 +196,7 @@ where
 
     let result = detector.detect_pieces(&board)?;
 
-    overlay_grid(&mut board, &config)?;
+    annotate_image(&mut board, &result, config)?;
 
     let mut out = Mat::default();
     resize(&board, &mut out, Size::default(), 0.5, 0.5, INTER_LINEAR)?;
@@ -285,6 +288,33 @@ where
             LINE_8,
             0,
         )?;
+    }
+
+    Ok(())
+}
+
+fn annotate_image<M>(image: &mut M, layout: &BoardLayout, config: &Config) -> Result<()>
+where
+    M: MatTrait + ToInputOutputArray,
+{
+    overlay_grid(image, config)?;
+
+    for (pos, field) in layout.field_iter() {
+        if let FieldOccupancy::Occupied(_, _) = field {
+            let text = format!("{}", field);
+            let pos = Point2i::new(
+                PX_PER_FIELD_EDGE as i32 * pos.col_in_img() as i32 + 10,
+                PX_PER_FIELD_EDGE as i32 * (pos.row_in_img() as i32 + 1) - 10,
+            );
+            put_text_def(
+                image,
+                text.as_str(),
+                pos,
+                FONT_HERSHEY_COMPLEX,
+                3.0,
+                COLOR_GREEN,
+            )?;
+        }
     }
 
     Ok(())

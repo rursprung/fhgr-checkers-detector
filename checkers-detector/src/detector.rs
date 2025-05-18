@@ -204,15 +204,15 @@ impl FieldPosition {
         self.col
     }
 
-    fn row_in_img(&self) -> u8 {
+    pub fn row_in_img(&self) -> u8 {
         self.row + 2
     }
 
-    fn col_in_img(&self) -> u8 {
+    pub fn col_in_img(&self) -> u8 {
         self.col + 2
     }
 
-    fn is_black_field(&self) -> bool {
+    pub fn is_black_field(&self) -> bool {
         if self.row % 2 == 0 {
             self.col % 2 == 1
         } else {
