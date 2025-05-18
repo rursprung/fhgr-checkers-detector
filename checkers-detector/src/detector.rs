@@ -1,3 +1,4 @@
+use crate::util::field_mask_roi;
 use DetectorError::*;
 use array2d::Array2D;
 use log::{debug, error};
@@ -129,10 +130,10 @@ impl Display for FieldOccupancy {
 /// Represents a position on the board.
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash)]
 pub struct FieldPosition {
-    /// row, counted from the top (opposite direction of what is printed on the board!).
-    row: u8,
-    /// column, counted from the left.
-    col: u8,
+    /// row, counted from the top (opposite direction of what is printed on the board!). Starts at image frame, i.e. 2 fields from the first row!
+    img_row: u8,
+    /// column, counted from the left. Starts at image frame, i.e. 2 fields from the first column!
+    img_col: u8,
     /// number of fields per line (and row) - needed to correctly label the row.
     num_fields_per_line: u8,
 }
@@ -156,32 +157,42 @@ impl FieldPosition {
             ));
         }
         Ok(Self {
-            row,
-            col,
+            img_row: row + 2,
+            img_col: col + 2,
             num_fields_per_line,
         })
     }
 
     /// Create based on position on the board, indexed with (2,2) in the top left field.
-    #[allow(unused)]
-    pub fn try_from_img_pos(img_row: u8, img_col: u8, num_fields_per_line: u8) -> Result<Self> {
-        if img_row < 2 || img_row > num_fields_per_line + 2 - 1 {
-            return Err(IndexOutOfBounds(
-                img_row as usize,
-                2,
-                num_fields_per_line as usize + 2 - 1,
-            ));
+    pub fn try_from_img_pos(
+        img_row: u8,
+        img_col: u8,
+        num_fields_per_line: u8,
+        allow_corner: bool,
+    ) -> Result<Self> {
+        fn lower_bound(allow_corner: bool) -> u8 {
+            if allow_corner { 0 } else { 2 }
         }
-        if img_col < 2 || img_col > num_fields_per_line + 2 - 1 {
-            return Err(IndexOutOfBounds(
-                img_col as usize,
-                2,
-                num_fields_per_line as usize + 2 - 1,
-            ));
+        fn upper_bound(num_fields_per_line: u8, allow_corner: bool) -> u8 {
+            if allow_corner {
+                num_fields_per_line + 4 - 1
+            } else {
+                num_fields_per_line + 2 - 1
+            }
         }
+        fn check_bound(val: u8, num_fields_per_line: u8, allow_corner: bool) -> Result<()> {
+            let lo = lower_bound(allow_corner);
+            let up = upper_bound(num_fields_per_line, allow_corner);
+            if val < lo || val > up {
+                return Err(IndexOutOfBounds(val as usize, lo as usize, up as usize));
+            }
+            Ok(())
+        }
+        check_bound(img_row, num_fields_per_line, allow_corner)?;
+        check_bound(img_col, num_fields_per_line, allow_corner)?;
         Ok(Self {
-            row: img_row - 2,
-            col: img_col - 2,
+            img_row: img_row,
+            img_col: img_col,
             num_fields_per_line,
         })
     }
@@ -198,35 +209,77 @@ impl FieldPosition {
         Self::try_new(row, col, num_fields_per_line)
     }
 
-    pub fn row(&self) -> u8 {
-        self.row
+    pub fn try_from_px(
+        x: u32,
+        y: u32,
+        px_per_field_edge: u8,
+        num_fields_per_line: u8,
+    ) -> Result<Self> {
+        let col = (x / px_per_field_edge as u32) as u8;
+        let row = (y / px_per_field_edge as u32) as u8;
+
+        Self::try_from_img_pos(row, col, num_fields_per_line, true)
     }
 
-    pub fn col(&self) -> u8 {
-        self.col
+    pub fn row(&self) -> Option<u8> {
+        if self.row_is_on_board() {
+            Some(self.img_row - 2)
+        } else {
+            None
+        }
+    }
+
+    pub fn col(&self) -> Option<u8> {
+        if self.col_is_on_board() {
+            Some(self.img_col - 2)
+        } else {
+            None
+        }
     }
 
     pub fn row_in_img(&self) -> u8 {
-        self.row + 2
+        self.img_row
     }
 
     pub fn col_in_img(&self) -> u8 {
-        self.col + 2
+        self.img_col
     }
 
-    pub fn is_black_field(&self) -> bool {
-        if self.row % 2 == 0 {
-            self.col % 2 == 1
+    pub fn is_black_field(&self) -> Result<bool> {
+        let row = self.row().map_or_else(|| Err(InvalidPosition), Ok)?;
+        let col = self.col().map_or_else(|| Err(InvalidPosition), Ok)?;
+        if row % 2 == 0 {
+            Ok(col % 2 == 1)
         } else {
-            self.col % 2 == 0
+            Ok(col % 2 == 0)
         }
+    }
+
+    fn row_is_on_board(&self) -> bool {
+        self.img_row >= 2 && self.img_row < (self.num_fields_per_line + 2)
+    }
+
+    fn col_is_on_board(&self) -> bool {
+        self.img_col >= 2 && self.img_col < (self.num_fields_per_line + 2)
+    }
+
+    pub fn is_on_board(&self) -> bool {
+        self.row_is_on_board() && self.col_is_on_board()
     }
 }
 
 impl Display for FieldPosition {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let row = char::from(b'A' + self.num_fields_per_line - 1 - self.row);
-        let col = char::from(b'1' + self.col);
+        let row = if !self.row_is_on_board() {
+            '?'
+        } else {
+            char::from(b'A' + self.num_fields_per_line - 1 - self.img_row + 2)
+        };
+        let col = if !self.col_is_on_board() {
+            '?'
+        } else {
+            char::from(b'1' + self.img_col - 2)
+        };
         write!(f, "{}{}", row, col)
     }
 }
@@ -267,14 +320,23 @@ impl BoardLayout {
             .flatten()
     }
 
-    fn get(&self, pos: &FieldPosition) -> Option<&FieldOccupancy> {
-        self.0.get(pos.row() as usize, pos.col() as usize)
+    pub fn get(&self, pos: &FieldPosition) -> Option<&FieldOccupancy> {
+        let row = pos.row();
+        let col = pos.col();
+        if row.is_none() || col.is_none() {
+            return None;
+        }
+        self.0.get(row.unwrap() as usize, col.unwrap() as usize)
     }
 
-    fn set(&mut self, pos: &FieldPosition, field_occupancy: FieldOccupancy) {
+    fn set(&mut self, pos: &FieldPosition, field_occupancy: FieldOccupancy) -> Result<()> {
+        let row = pos.row().map_or_else(|| Err(InvalidPosition), Ok)?;
+        let col = pos.col().map_or_else(|| Err(InvalidPosition), Ok)?;
         self.0
-            .set(pos.row() as usize, pos.col() as usize, field_occupancy)
+            .set(row as usize, col as usize, field_occupancy)
             .unwrap();
+
+        Ok(())
     }
 
     fn print_column_header(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -422,32 +484,23 @@ impl BoardProcessor {
         // save the positions due to mutability issues (we cannot just take the iter and map it)
         let field_positions = result
             .field_pos_iter()
-            .filter(|pos| pos.is_black_field())
+            .filter(|pos| pos.is_black_field().unwrap())
             .collect::<Vec<_>>();
 
         for pos in field_positions.iter() {
             let field_occupancy = self.detect_pieces_on_field(&pos)?;
             debug!("field occupancy at {} is {}", pos, field_occupancy,);
-            result.set(&pos, field_occupancy);
+            result.set(&pos, field_occupancy)?;
         }
 
         Ok(result)
-    }
-
-    fn field_mask_roi(&self, pos: &FieldPosition) -> Rect2i {
-        Rect2i::new(
-            self.config.px_per_field_edge as i32 * pos.col_in_img() as i32,
-            self.config.px_per_field_edge as i32 * (pos.row_in_img() as i32 - 1),
-            self.config.px_per_field_edge as _,
-            2 * self.config.px_per_field_edge as i32,
-        )
     }
 
     fn occupancy_on_field<M>(&self, mask: &M, pos: &FieldPosition) -> Result<f64>
     where
         M: MatTrait,
     {
-        let mask_region = self.field_mask_roi(pos);
+        let mask_region = field_mask_roi(pos, self.config.px_per_field_edge);
         let field = mask.roi(mask_region)?;
 
         // debug information
@@ -548,7 +601,7 @@ mod tests {
 
     #[test]
     fn test_field_position_try_from_img_pos() {
-        let pos = FieldPosition::try_from_img_pos(2, 2, 8).unwrap();
+        let pos = FieldPosition::try_from_img_pos(2, 2, 8, false).unwrap();
         assert_eq!("H1", pos.to_string());
     }
 
@@ -561,29 +614,43 @@ mod tests {
     #[test]
     fn test_field_position_row() {
         let pos = FieldPosition::try_new(3, 0, 8).unwrap();
-        assert_eq!(3, pos.row());
+        assert_eq!(Some(3), pos.row());
         assert_eq!(5, pos.row_in_img());
     }
 
     #[test]
     fn test_field_position_col() {
         let pos = FieldPosition::try_new(0, 3, 8).unwrap();
-        assert_eq!(3, pos.col());
+        assert_eq!(Some(3), pos.col());
         assert_eq!(5, pos.col_in_img());
+    }
+
+    #[test]
+    fn test_field_position_outside_board() {
+        let pos = FieldPosition::try_from_img_pos(1, 2, 8, true).unwrap();
+        assert_eq!(None, pos.row());
+        assert_eq!(None, pos.col());
+        assert_eq!(1, pos.row_in_img());
+        assert_eq!(2, pos.col_in_img());
+        assert_eq!("??", pos.to_string());
     }
 
     #[test]
     fn test_field_iter() {
         let num_fields_per_line = 2;
         let mut board = BoardLayout::new(num_fields_per_line);
-        board.set(
-            &FieldPosition::try_new(0, 1, num_fields_per_line).unwrap(),
-            FieldOccupancy::Occupied(PieceColour::Black, PieceType::Man),
-        );
-        board.set(
-            &FieldPosition::try_new(1, 0, num_fields_per_line).unwrap(),
-            FieldOccupancy::Occupied(PieceColour::Black, PieceType::King),
-        );
+        board
+            .set(
+                &FieldPosition::try_new(0, 1, num_fields_per_line).unwrap(),
+                FieldOccupancy::Occupied(PieceColour::Black, PieceType::Man),
+            )
+            .unwrap();
+        board
+            .set(
+                &FieldPosition::try_new(1, 0, num_fields_per_line).unwrap(),
+                FieldOccupancy::Occupied(PieceColour::Black, PieceType::King),
+            )
+            .unwrap();
 
         let mut fields = board.field_iter();
         assert_eq!(
@@ -621,16 +688,22 @@ mod tests {
     fn test_field_iter_blacks_only() {
         let num_fields_per_line = 2;
         let mut board = BoardLayout::new(num_fields_per_line);
-        board.set(
-            &FieldPosition::try_new(0, 1, num_fields_per_line).unwrap(),
-            FieldOccupancy::Occupied(PieceColour::Black, PieceType::Man),
-        );
-        board.set(
-            &FieldPosition::try_new(1, 0, num_fields_per_line).unwrap(),
-            FieldOccupancy::Occupied(PieceColour::Black, PieceType::King),
-        );
+        board
+            .set(
+                &FieldPosition::try_new(0, 1, num_fields_per_line).unwrap(),
+                FieldOccupancy::Occupied(PieceColour::Black, PieceType::Man),
+            )
+            .unwrap();
+        board
+            .set(
+                &FieldPosition::try_new(1, 0, num_fields_per_line).unwrap(),
+                FieldOccupancy::Occupied(PieceColour::Black, PieceType::King),
+            )
+            .unwrap();
 
-        let mut fields = board.field_iter().filter(|(pos, _)| pos.is_black_field());
+        let mut fields = board
+            .field_iter()
+            .filter(|(pos, _)| pos.is_black_field().unwrap());
         assert_eq!(
             (
                 FieldPosition::try_new(0, 1, num_fields_per_line).unwrap(),

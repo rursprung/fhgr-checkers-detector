@@ -16,21 +16,24 @@ use crate::board_extractor::{BoardExtractorError, Config as BoardExtractorConfig
 use crate::camera_control::Esp32Cam;
 use crate::detector::{
     BoardLayout, CalibratedDetector, Config as DetectorConfig, DebugFieldConfig, Detector,
-    FieldOccupancy,
+    FieldOccupancy, FieldPosition,
 };
-use crate::util::resize_and_show;
+use crate::util::{field_mask_roi, resize_and_show};
 use DetectorError::*;
 use clap::Parser;
-use log::{debug, warn};
+use lazy_static::lazy_static;
+use log::{debug, info, warn};
+use opencv::imgproc::{COLOR_RGB2HSV, cvt_color_def};
 use opencv::{
-    core::{Point2i, Scalar, ToInputArray, ToInputOutputArray, ToOutputArray},
-    highgui::{wait_key, wait_key_def},
+    core::{Point2i, Scalar, ToInputOutputArray, mean_def},
+    highgui::{MouseEventTypes, named_window_def, set_mouse_callback, wait_key, wait_key_def},
     imgcodecs::imread_def,
     imgproc::{FONT_HERSHEY_COMPLEX, LINE_8, line, put_text_def},
     prelude::*,
     videoio::VideoCapture,
 };
 use std::fmt::{Display, Formatter};
+use std::sync::Mutex;
 use url::Url;
 
 /// Defines a fixed length for the edge of a field in the rectified image
@@ -178,37 +181,105 @@ impl From<opencv::Error> for DetectorError {
 
 type Result<T> = std::result::Result<T, DetectorError>;
 
-/// Handle an individual frame.
-fn handle_frame<M>(frame: &M, detector: &CalibratedDetector, config: &Config) -> Result<()>
-where
-    M: MatTrait + ToOutputArray + ToInputArray,
-{
-    let board = extract_board(
-        frame,
-        &BoardExtractorConfig {
-            num_fields_per_line: config.num_fields_per_line,
-            px_per_field_edge: PX_PER_FIELD_EDGE,
-        },
-    )?;
-    if board.is_none() {
-        warn!("failed to find board! skipping frame");
-        return Err(BoardNotFound);
+lazy_static! {
+    static ref VIEWER: Mutex<BoardViewer> = Mutex::new(BoardViewer::new().unwrap());
+}
+
+struct BoardViewer {
+    num_fields_per_line: Option<u8>,
+    detector: Option<CalibratedDetector>,
+    original_image: Option<Mat>,
+    board: Option<Mat>,
+    result: Option<BoardLayout>,
+}
+
+impl BoardViewer {
+    fn new() -> Result<Self> {
+        named_window_def("board")?;
+        set_mouse_callback("board", Some(Box::new(Self::handle_mouse_cb)))?;
+        Ok(Self {
+            num_fields_per_line: None,
+            detector: None,
+            original_image: None,
+            board: None,
+            result: None,
+        })
     }
-    let mut board = board.unwrap();
 
-    let result = detector.detect_pieces(&board)?;
+    fn init(&mut self, detector: CalibratedDetector, num_fields_per_line: u8) {
+        self.detector = Some(detector);
+        self.num_fields_per_line = Some(num_fields_per_line);
+    }
 
-    annotate_image(&mut board, &result, config)?;
+    fn handle_mouse_cb(event: i32, x: i32, y: i32, flags: i32) {
+        VIEWER.lock().unwrap().handle_mouse(event, x, y, flags);
+    }
 
-    resize_and_show("board", &board)?;
+    fn handle_mouse(&self, event: i32, x: i32, y: i32, _flags: i32) {
+        let pos = FieldPosition::try_from_px(
+            2 * x as u32,
+            2 * y as u32,
+            PX_PER_FIELD_EDGE,
+            self.num_fields_per_line.unwrap(),
+        )
+        .unwrap();
+        if event == MouseEventTypes::EVENT_LBUTTONDOWN as i32 {
+            if let Some(result) = &self.result {
+                if pos.is_on_board() {
+                    info!("Selected field {}: {}", pos, result.get(&pos).unwrap());
+                }
+            }
+        }
+        if event == MouseEventTypes::EVENT_RBUTTONDOWN as i32 {
+            let mean_hsv = self.get_mean_hsv_at_pos(&pos).unwrap();
+            info!("Mean HSV at field {}: {:?}", pos, mean_hsv);
+        }
+    }
 
-    debug!("{}", result);
+    fn get_mean_hsv_at_pos(&self, pos: &FieldPosition) -> Result<Scalar> {
+        let mut board_hsv = Mat::default();
+        cvt_color_def(self.board.as_ref().unwrap(), &mut board_hsv, COLOR_RGB2HSV)?;
 
-    Ok(())
+        let roi = field_mask_roi(pos, PX_PER_FIELD_EDGE);
+
+        mean_def(&board_hsv.roi(roi)?).map_err(OtherOpenCVError)
+    }
+
+    /// Handle an individual frame.
+    fn handle_frame(&mut self, frame: Mat, config: &Config) -> Result<()> {
+        let board = extract_board(
+            &frame,
+            &BoardExtractorConfig {
+                num_fields_per_line: config.num_fields_per_line,
+                px_per_field_edge: PX_PER_FIELD_EDGE,
+            },
+        )?;
+        if board.is_none() {
+            warn!("failed to find board! skipping frame");
+            return Err(BoardNotFound);
+        }
+        let board = board.unwrap();
+        self.original_image = Some(frame);
+
+        let result = self.detector.as_ref().unwrap().detect_pieces(&board)?;
+
+        let mut board_annotated = Mat::default();
+        board.copy_to(&mut board_annotated)?;
+        annotate_image(&mut board_annotated, &result, config)?;
+
+        resize_and_show("board", &board_annotated)?;
+
+        debug!("{}", result);
+
+        self.board = Some(board);
+        self.result = Some(result);
+
+        Ok(())
+    }
 }
 
 /// Tries to open the specified video input and stream it while it lasts.
-fn handle_video_input(detector: &CalibratedDetector, config: &Config) -> Result<()> {
+fn handle_video_input(config: &Config) -> Result<()> {
     let video_input = config.input.video_input.as_ref().unwrap();
 
     let video_input = match config.camera_type {
@@ -251,7 +322,7 @@ fn handle_video_input(detector: &CalibratedDetector, config: &Config) -> Result<
             .read(&mut image)
             .map_err(|e| ImageAcquisitionFailure(Some(e)))?;
 
-        match handle_frame(&image, &detector, config) {
+        match VIEWER.lock().unwrap().handle_frame(image, config) {
             Ok(_) | Err(BoardNotFound) => {}
             Err(e) => return Err(e),
         }
@@ -331,13 +402,19 @@ fn main() -> Result<()> {
         debug_field_config: config.debug_field()?,
     });
     let detector = detector.calibrate();
+    VIEWER
+        .lock()
+        .unwrap()
+        .init(detector, config.num_fields_per_line);
 
     if let Some(ref image_input) = config.input.image_input {
         let image = imread_def(image_input).map_err(|e| ImageAcquisitionFailure(Some(e)))?;
-        handle_frame(&image, &detector, &config)?;
+        {
+            VIEWER.lock().unwrap().handle_frame(image, &config)?;
+        }
         wait_key_def()?;
     } else if config.input.video_input.is_some() {
-        handle_video_input(&detector, &config)?;
+        handle_video_input(&config)?;
     } else {
         unreachable!("clap must ensure that either image_input or video_input is set!");
     }
