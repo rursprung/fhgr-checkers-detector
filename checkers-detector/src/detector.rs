@@ -1,8 +1,10 @@
 use DetectorError::*;
 use array2d::Array2D;
-use log::debug;
+use log::{debug, error};
 use opencv::{
-    core::{Rect2i, Scalar, Size2i, ToInputArray, bitwise_and_def, count_non_zero, in_range},
+    core::{
+        Rect2i, Scalar, Size2i, ToInputArray, Vec3b, bitwise_and_def, count_non_zero, in_range,
+    },
     imgproc::{
         COLOR_RGB2HSV, MORPH_OPEN, MORPH_RECT, cvt_color_def, get_structuring_element_def,
         morphology_ex_def,
@@ -350,10 +352,10 @@ impl InitialImageProcessor {
         Ok(mask)
     }
 
-    fn get_mask_for_colour(
+    fn get_mask_for_colour<A: ToInputArray>(
         &self,
-        lower_bound_hsv: &Scalar,
-        upper_bound_hsv: &Scalar,
+        lower_bound_hsv: &A,
+        upper_bound_hsv: &A,
     ) -> Result<Mat> {
         let mut mask = Mat::default();
         in_range(&self.board_hsv, lower_bound_hsv, upper_bound_hsv, &mut mask)?;
@@ -369,10 +371,10 @@ impl InitialImageProcessor {
         Ok(mask_morph)
     }
 
-    fn get_mask_for_pieces(
+    fn get_mask_for_pieces<A: ToInputArray>(
         &self,
-        lower_bound_hsv: &Scalar,
-        upper_bound_hsv: &Scalar,
+        lower_bound_hsv: &A,
+        upper_bound_hsv: &A,
     ) -> Result<Mat> {
         let mut result = Mat::default();
         bitwise_and_def(
@@ -385,14 +387,18 @@ impl InitialImageProcessor {
     }
 
     fn get_mask_for_black_pieces(&self) -> Result<Mat> {
-        self.get_mask_for_pieces(&Scalar::all(0.0), &Scalar::new(180.0, 255.0, 50.0, 0.0))
+        self.get_mask_for_pieces(&Vec3b::all(0), &Vec3b::from([180, 255, 50]))
+    }
+
+    fn get_mask_for_white_pieces(&self) -> Result<Mat> {
+        self.get_mask_for_pieces(&Vec3b::from([0, 0, 100]), &Vec3b::from([50, 150, 255]))
     }
 
     fn process(self) -> Result<BoardProcessor> {
         Ok(BoardProcessor {
             config: self.config,
             mask_blacks: self.get_mask_for_black_pieces()?,
-            _mask_whites: Default::default(), // TODO
+            mask_whites: self.get_mask_for_white_pieces()?,
         })
     }
 }
@@ -400,29 +406,16 @@ impl InitialImageProcessor {
 struct BoardProcessor {
     config: Config,
     mask_blacks: Mat,
-    _mask_whites: Mat,
+    mask_whites: Mat,
 }
 
 impl BoardProcessor {
     fn detect_pieces(self) -> Result<BoardLayout> {
         #[cfg(feature = "show_debug_screens")]
         {
-            use opencv::{
-                core::Size,
-                highgui::imshow,
-                imgproc::{INTER_LINEAR, resize},
-            };
-
-            let mut out = Mat::default();
-            resize(
-                &self.mask_blacks,
-                &mut out,
-                Size::default(),
-                0.5,
-                0.5,
-                INTER_LINEAR,
-            )?;
-            imshow("mask blacks", &out)?;
+            use crate::util::resize_and_show;
+            resize_and_show("mask blacks", &self.mask_blacks)?;
+            resize_and_show("mask whites", &self.mask_whites)?;
         }
 
         let mut result = BoardLayout::new(self.config.num_fields_per_line);
@@ -483,10 +476,16 @@ impl BoardProcessor {
 
     fn detect_pieces_on_field(&self, pos: &FieldPosition) -> Result<FieldOccupancy> {
         let occupancy_blacks = self.occupancy_on_field(&self.mask_blacks, pos)?;
-        let occupancy_whites = 0.0; // TODO: occupancy_on_field(mask_whites, col, row, config)?;
+        let occupancy_whites = self.occupancy_on_field(&self.mask_whites, pos)?;
 
         // can't have both at the same time, otherwise our colour mask is wrong
-        assert!(occupancy_blacks < 0.5 || occupancy_whites < 0.5);
+        //assert!(occupancy_blacks < 0.5 || occupancy_whites < 0.5);
+        if occupancy_blacks > 0.5 && occupancy_whites > 0.5 {
+            error!(
+                "encountered occupancy_blacks = {} > 0.5 && occupancy_whites = {} > 0.5 at {}",
+                occupancy_blacks, occupancy_whites, pos
+            );
+        }
 
         let colour = if occupancy_blacks > 0.5 {
             PieceColour::Black

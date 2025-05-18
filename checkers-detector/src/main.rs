@@ -10,6 +10,7 @@
 mod board_extractor;
 mod camera_control;
 mod detector;
+mod util;
 
 use crate::board_extractor::{BoardExtractorError, Config as BoardExtractorConfig, extract_board};
 use crate::camera_control::Esp32Cam;
@@ -17,14 +18,15 @@ use crate::detector::{
     BoardLayout, CalibratedDetector, Config as DetectorConfig, DebugFieldConfig, Detector,
     FieldOccupancy,
 };
+use crate::util::resize_and_show;
 use DetectorError::*;
 use clap::Parser;
 use log::{debug, warn};
 use opencv::{
-    core::{Point2i, Scalar, Size, ToInputArray, ToInputOutputArray, ToOutputArray},
-    highgui::{imshow, wait_key, wait_key_def},
+    core::{Point2i, Scalar, ToInputArray, ToInputOutputArray, ToOutputArray},
+    highgui::{wait_key, wait_key_def},
     imgcodecs::imread_def,
-    imgproc::{FONT_HERSHEY_COMPLEX, INTER_LINEAR, LINE_8, line, put_text_def, resize},
+    imgproc::{FONT_HERSHEY_COMPLEX, LINE_8, line, put_text_def},
     prelude::*,
     videoio::VideoCapture,
 };
@@ -198,9 +200,7 @@ where
 
     annotate_image(&mut board, &result, config)?;
 
-    let mut out = Mat::default();
-    resize(&board, &mut out, Size::default(), 0.5, 0.5, INTER_LINEAR)?;
-    imshow("board", &out)?;
+    resize_and_show("board", &board)?;
 
     debug!("{}", result);
 
