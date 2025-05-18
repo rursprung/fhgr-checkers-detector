@@ -161,6 +161,7 @@ impl FieldPosition {
     }
 
     /// Create based on position on the board, indexed with (2,2) in the top left field.
+    #[allow(unused)]
     pub fn try_from_img_pos(img_row: u8, img_col: u8, num_fields_per_line: u8) -> Result<Self> {
         if img_row < 2 || img_row > num_fields_per_line + 2 - 1 {
             return Err(IndexOutOfBounds(
@@ -210,6 +211,14 @@ impl FieldPosition {
     fn col_in_img(&self) -> u8 {
         self.col + 2
     }
+
+    fn is_black_field(&self) -> bool {
+        if self.row % 2 == 0 {
+            self.col % 2 == 1
+        } else {
+            self.col % 2 == 0
+        }
+    }
 }
 
 impl Display for FieldPosition {
@@ -230,6 +239,34 @@ impl BoardLayout {
             num_fields_per_line as _,
             num_fields_per_line as _,
         ))
+    }
+
+    #[allow(unused)]
+    pub fn field_iter(&self) -> impl Iterator<Item = (FieldPosition, &FieldOccupancy)> {
+        self.field_pos_iter()
+            .map(|pos| (pos, self.get(&pos).unwrap()))
+    }
+
+    pub fn field_pos_iter(&self) -> impl Iterator<Item = FieldPosition> {
+        let num_fields_per_line = self.0.row_len() as u8;
+
+        (0..num_fields_per_line)
+            .into_iter()
+            .map(move |row| {
+                (0..num_fields_per_line).into_iter().map(move |col| {
+                    FieldPosition::try_new(
+                        row.clone() as u8,
+                        col.clone() as u8,
+                        num_fields_per_line.clone(),
+                    )
+                    .unwrap()
+                })
+            })
+            .flatten()
+    }
+
+    fn get(&self, pos: &FieldPosition) -> Option<&FieldOccupancy> {
+        self.0.get(pos.row() as usize, pos.col() as usize)
     }
 
     fn set(&mut self, pos: &FieldPosition, field_occupancy: FieldOccupancy) {
@@ -259,7 +296,7 @@ impl BoardLayout {
     }
 
     fn print_row_separator(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "   {}", "---|".repeat(self.0.row_len()))
+        writeln!(f, "  |{}", "---|".repeat(self.0.row_len()))
     }
 }
 
@@ -389,21 +426,16 @@ impl BoardProcessor {
         }
 
         let mut result = BoardLayout::new(self.config.num_fields_per_line);
+        // save the positions due to mutability issues (we cannot just take the iter and map it)
+        let field_positions = result
+            .field_pos_iter()
+            .filter(|pos| pos.is_black_field())
+            .collect::<Vec<_>>();
 
-        for row in 2..(self.config.num_fields_per_line + 2) {
-            // we only need to look at dark fields, and we know that we start with a light field on H1 (top left).
-            // we also know that they alternate per line (thus every even line number is a dark field).
-            // and finally we know that we only need to look at every other field since we can ignore the
-            // light fields.
-            let col_start = 2 + if row % 2 == 0 { 1 } else { 0 };
-            for col in (col_start..(self.config.num_fields_per_line + 2)).step_by(2) {
-                let pos =
-                    FieldPosition::try_from_img_pos(row, col, self.config.num_fields_per_line)?;
-
-                let field_occupancy = self.detect_pieces_on_field(&pos)?;
-                debug!("field occupancy at {} is {}", pos, field_occupancy,);
-                result.set(&pos, field_occupancy);
-            }
+        for pos in field_positions.iter() {
+            let field_occupancy = self.detect_pieces_on_field(&pos)?;
+            debug!("field occupancy at {} is {}", pos, field_occupancy,);
+            result.set(&pos, field_occupancy);
         }
 
         Ok(result)
@@ -539,5 +571,81 @@ mod tests {
         let pos = FieldPosition::try_new(0, 3, 8).unwrap();
         assert_eq!(3, pos.col());
         assert_eq!(5, pos.col_in_img());
+    }
+
+    #[test]
+    fn test_field_iter() {
+        let num_fields_per_line = 2;
+        let mut board = BoardLayout::new(num_fields_per_line);
+        board.set(
+            &FieldPosition::try_new(0, 1, num_fields_per_line).unwrap(),
+            FieldOccupancy::Occupied(PieceColour::Black, PieceType::Man),
+        );
+        board.set(
+            &FieldPosition::try_new(1, 0, num_fields_per_line).unwrap(),
+            FieldOccupancy::Occupied(PieceColour::Black, PieceType::King),
+        );
+
+        let mut fields = board.field_iter();
+        assert_eq!(
+            (
+                FieldPosition::try_new(0, 0, num_fields_per_line).unwrap(),
+                &FieldOccupancy::WrongType
+            ),
+            fields.next().unwrap()
+        );
+        assert_eq!(
+            (
+                FieldPosition::try_new(0, 1, num_fields_per_line).unwrap(),
+                &FieldOccupancy::Occupied(PieceColour::Black, PieceType::Man)
+            ),
+            fields.next().unwrap()
+        );
+        assert_eq!(
+            (
+                FieldPosition::try_new(1, 0, num_fields_per_line).unwrap(),
+                &FieldOccupancy::Occupied(PieceColour::Black, PieceType::King)
+            ),
+            fields.next().unwrap()
+        );
+        assert_eq!(
+            (
+                FieldPosition::try_new(1, 1, num_fields_per_line).unwrap(),
+                &FieldOccupancy::WrongType
+            ),
+            fields.next().unwrap()
+        );
+        assert!(fields.next().is_none());
+    }
+
+    #[test]
+    fn test_field_iter_blacks_only() {
+        let num_fields_per_line = 2;
+        let mut board = BoardLayout::new(num_fields_per_line);
+        board.set(
+            &FieldPosition::try_new(0, 1, num_fields_per_line).unwrap(),
+            FieldOccupancy::Occupied(PieceColour::Black, PieceType::Man),
+        );
+        board.set(
+            &FieldPosition::try_new(1, 0, num_fields_per_line).unwrap(),
+            FieldOccupancy::Occupied(PieceColour::Black, PieceType::King),
+        );
+
+        let mut fields = board.field_iter().filter(|(pos, _)| pos.is_black_field());
+        assert_eq!(
+            (
+                FieldPosition::try_new(0, 1, num_fields_per_line).unwrap(),
+                &FieldOccupancy::Occupied(PieceColour::Black, PieceType::Man)
+            ),
+            fields.next().unwrap()
+        );
+        assert_eq!(
+            (
+                FieldPosition::try_new(1, 0, num_fields_per_line).unwrap(),
+                &FieldOccupancy::Occupied(PieceColour::Black, PieceType::King)
+            ),
+            fields.next().unwrap()
+        );
+        assert!(fields.next().is_none());
     }
 }
