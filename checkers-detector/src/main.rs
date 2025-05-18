@@ -11,17 +11,17 @@ mod board_extractor;
 mod camera_control;
 mod detector;
 
-use crate::board_extractor::{BoardExtractorError, extract_board, Config as BoardExtractorConfig};
+use crate::board_extractor::{BoardExtractorError, Config as BoardExtractorConfig, extract_board};
 use crate::camera_control::Esp32Cam;
-use crate::detector::{DebugFieldConfig, Detector, Config as DetectorConfig, CalibratedDetector};
+use crate::detector::{CalibratedDetector, Config as DetectorConfig, DebugFieldConfig, Detector};
 use DetectorError::*;
 use clap::Parser;
 use log::{debug, warn};
 use opencv::{
-    core::{Size, ToInputArray, ToOutputArray},
+    core::{Point2i, Scalar, Size, ToInputArray, ToOutputArray},
     highgui::{imshow, wait_key, wait_key_def},
     imgcodecs::imread_def,
-    imgproc::{INTER_LINEAR, resize},
+    imgproc::{INTER_LINEAR, LINE_8, line, resize},
     prelude::*,
     videoio::VideoCapture,
 };
@@ -30,6 +30,8 @@ use url::Url;
 
 /// Defines a fixed length for the edge of a field in the rectified image
 const PX_PER_FIELD_EDGE: u8 = 128;
+
+const COLOR_GREEN: Scalar = Scalar::new(0.0, 255.0, 0.0, 0.0);
 
 #[derive(Copy, Clone, Debug, clap::ValueEnum)]
 enum CameraType {
@@ -83,6 +85,15 @@ impl Config {
                 )?)),
             }
         }
+    }
+
+    fn num_columns_total(&self) -> u8 {
+        // one for the aruco marker and one for the labels per side
+        self.num_fields_per_line + 4
+    }
+
+    fn image_edge_length(&self) -> i32 {
+        PX_PER_FIELD_EDGE as i32 * self.num_columns_total() as i32
     }
 }
 
@@ -178,9 +189,11 @@ where
         warn!("failed to find board! skipping frame");
         return Err(BoardNotFound);
     }
-    let board = board.unwrap();
+    let mut board = board.unwrap();
 
     let result = detector.detect_pieces(&board)?;
+
+    overlay_grid(&mut board, &config)?;
 
     let mut out = Mat::default();
     resize(&board, &mut out, Size::default(), 0.5, 0.5, INTER_LINEAR)?;
@@ -247,18 +260,46 @@ fn handle_video_input(detector: &CalibratedDetector, config: &Config) -> Result<
     }
 }
 
+fn overlay_grid<M>(image: &mut M, config: &Config) -> Result<()>
+where
+    M: MatTrait + opencv::core::ToInputOutputArray,
+{
+    for i in 1..config.num_columns_total() as i32 {
+        // horizontal line
+        line(
+            image,
+            Point2i::new(0, i * PX_PER_FIELD_EDGE as i32),
+            Point2i::new(config.image_edge_length(), i * PX_PER_FIELD_EDGE as i32),
+            COLOR_GREEN,
+            3,
+            LINE_8,
+            0,
+        )?;
+        // vertical line
+        line(
+            image,
+            Point2i::new(i * PX_PER_FIELD_EDGE as i32, 0),
+            Point2i::new(i * PX_PER_FIELD_EDGE as i32, config.image_edge_length()),
+            COLOR_GREEN,
+            3,
+            LINE_8,
+            0,
+        )?;
+    }
+
+    Ok(())
+}
+
 fn main() -> Result<()> {
     env_logger::init();
 
     let config = Config::parse();
-    
-    let detector = Detector::new(
-        DetectorConfig {
-            num_fields_per_line: config.num_fields_per_line,
-            px_per_field_edge: PX_PER_FIELD_EDGE,
-            debug_field_config: config.debug_field()?,
-        }
-    );
+
+    let detector = Detector::new(DetectorConfig {
+        num_fields_per_line: config.num_fields_per_line,
+        px_per_field_edge: PX_PER_FIELD_EDGE,
+        debug_field_config: config.debug_field()?,
+    });
     let detector = detector.calibrate();
 
     if let Some(ref image_input) = config.input.image_input {
