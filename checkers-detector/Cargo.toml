@@ -7,6 +7,8 @@ edition = "2024"
 default = ["resolve_opencv_with_vcpkg"]
 resolve_opencv_with_vcpkg = ["dep:vcpkg"]
 
+show_debug_screens = []
+
 [dependencies]
 opencv.workspace = true
 clap.workspace = true
@@ -14,6 +16,7 @@ url.workspace = true
 reqwest.workspace = true
 log.workspace = true
 env_logger.workspace = true
+array2d.workspace = true
 
 [build-dependencies]
 vcpkg = { workspace = true, optional = true }

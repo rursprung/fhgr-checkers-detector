@@ -9,10 +9,11 @@
 
 mod board_extractor;
 mod camera_control;
+mod detector;
 
-use crate::board_extractor::BoardExtractorError::OpenCVError;
-use crate::board_extractor::{BoardExtractorError, extract_board};
+use crate::board_extractor::{BoardExtractorError, extract_board, Config as BoardExtractorConfig};
 use crate::camera_control::Esp32Cam;
+use crate::detector::{DebugFieldConfig, Detector, Config as DetectorConfig, CalibratedDetector};
 use DetectorError::*;
 use clap::Parser;
 use log::{debug, warn};
@@ -57,6 +58,32 @@ struct Config {
     /// The type of the camera which is being accessed.
     #[arg(short, long, value_enum, requires = "video_input")]
     camera_type: Option<CameraType>,
+    /// If specified, additional information about the processing of the specified field is shown.
+    /// Either specify 'all' or a field position (e.g. 'A1')
+    #[cfg(feature = "show_debug_screens")]
+    #[arg(long)]
+    debug_field: Option<String>,
+}
+
+impl Config {
+    fn debug_field(&self) -> Result<DebugFieldConfig> {
+        #[cfg(not(feature = "show_debug_screens"))]
+        return Ok(DebugFieldConfig::None);
+
+        #[cfg(feature = "show_debug_screens")]
+        {
+            use crate::detector::FieldPosition;
+            let debug_field = self.debug_field.as_ref().map(|s| s.to_uppercase());
+            match debug_field {
+                None => Ok(DebugFieldConfig::None),
+                Some(s) if s == "ALL" => Ok(DebugFieldConfig::All),
+                Some(ref s) => Ok(DebugFieldConfig::Specific(FieldPosition::try_from_str(
+                    &s,
+                    self.num_fields_per_line,
+                )?)),
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -66,6 +93,7 @@ enum DetectorError {
     ImageAcquisitionFailure(Option<opencv::Error>),
     OtherOpenCVError(opencv::Error),
     BoardNotFound,
+    InternalDetectionError(detector::DetectorError),
 }
 
 impl Display for DetectorError {
@@ -83,6 +111,7 @@ impl Display for DetectorError {
                 f,
                 "Board not found in image. Are all aruco markers in view?"
             ),
+            InternalDetectionError(_) => write!(f, "internal detection error"),
         }
     }
 }
@@ -93,6 +122,7 @@ impl std::error::Error for DetectorError {
             UrlParseError(e) => Some(e),
             ImageAcquisitionFailure(Some(e)) => Some(e),
             OtherOpenCVError(e) => Some(e),
+            InternalDetectionError(e) => Some(e),
             _ => None,
         }
     }
@@ -106,8 +136,19 @@ impl From<url::ParseError> for DetectorError {
 
 impl From<BoardExtractorError> for DetectorError {
     fn from(e: BoardExtractorError) -> Self {
+        use crate::board_extractor::BoardExtractorError::*;
         match e {
             OpenCVError(e) => OtherOpenCVError(e),
+        }
+    }
+}
+
+impl From<detector::DetectorError> for DetectorError {
+    fn from(e: detector::DetectorError) -> Self {
+        use detector::DetectorError::*;
+        match e {
+            OpenCVError(e) => OtherOpenCVError(e),
+            e => InternalDetectionError(e),
         }
     }
 }
@@ -122,13 +163,13 @@ impl From<opencv::Error> for DetectorError {
 type Result<T> = std::result::Result<T, DetectorError>;
 
 /// Handle an individual frame.
-fn handle_frame<M>(frame: &M, config: &Config) -> Result<()>
+fn handle_frame<M>(frame: &M, detector: &CalibratedDetector, config: &Config) -> Result<()>
 where
     M: MatTrait + ToOutputArray + ToInputArray,
 {
     let board = extract_board(
         frame,
-        &board_extractor::Config {
+        &BoardExtractorConfig {
             num_fields_per_line: config.num_fields_per_line,
             px_per_field_edge: PX_PER_FIELD_EDGE,
         },
@@ -139,15 +180,19 @@ where
     }
     let board = board.unwrap();
 
+    let result = detector.detect_pieces(&board)?;
+
     let mut out = Mat::default();
     resize(&board, &mut out, Size::default(), 0.5, 0.5, INTER_LINEAR)?;
     imshow("board", &out)?;
+
+    debug!("{}", result);
 
     Ok(())
 }
 
 /// Tries to open the specified video input and stream it while it lasts.
-fn handle_video_input(config: &Config) -> Result<()> {
+fn handle_video_input(detector: &CalibratedDetector, config: &Config) -> Result<()> {
     let video_input = config.input.video_input.as_ref().unwrap();
 
     let video_input = match config.camera_type {
@@ -190,7 +235,7 @@ fn handle_video_input(config: &Config) -> Result<()> {
             .read(&mut image)
             .map_err(|e| ImageAcquisitionFailure(Some(e)))?;
 
-        match handle_frame(&image, config) {
+        match handle_frame(&image, &detector, config) {
             Ok(_) | Err(BoardNotFound) => {}
             Err(e) => return Err(e),
         }
@@ -206,13 +251,22 @@ fn main() -> Result<()> {
     env_logger::init();
 
     let config = Config::parse();
+    
+    let detector = Detector::new(
+        DetectorConfig {
+            num_fields_per_line: config.num_fields_per_line,
+            px_per_field_edge: PX_PER_FIELD_EDGE,
+            debug_field_config: config.debug_field()?,
+        }
+    );
+    let detector = detector.calibrate();
 
     if let Some(ref image_input) = config.input.image_input {
         let image = imread_def(image_input).map_err(|e| ImageAcquisitionFailure(Some(e)))?;
-        handle_frame(&image, &config)?;
+        handle_frame(&image, &detector, &config)?;
         wait_key_def()?;
     } else if config.input.video_input.is_some() {
-        handle_video_input(&config)?;
+        handle_video_input(&detector, &config)?;
     } else {
         unreachable!("clap must ensure that either image_input or video_input is set!");
     }

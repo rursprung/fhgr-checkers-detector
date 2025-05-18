@@ -13,3 +13,4 @@ url = "2"
 reqwest = {  version = "0.12", features = ["blocking"] }
 log = "0.4"
 env_logger = "0.11"
+array2d = "0.3"
