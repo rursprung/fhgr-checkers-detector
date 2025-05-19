@@ -613,6 +613,7 @@ struct CalibrationData {
     min_contour_height: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash)]
 pub struct CalibratedDetector {
     config: Config,
     calibration_data: CalibrationData,
