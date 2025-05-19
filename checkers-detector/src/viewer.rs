@@ -1,5 +1,5 @@
 use crate::board_extractor::{BoardExtractorError, extract_board};
-use crate::calibrator::{Config as CalibratorConfig, try_calibrate};
+use crate::calibrator::{Config as CalibratorConfig, reference_positions, try_calibrate};
 use crate::camera_control::Esp32Cam;
 use crate::detector::{
     BoardLayout, CalibratedDetector, CalibrationData, Config as DetectorConfig, DebugFieldConfig,
@@ -159,6 +159,16 @@ impl From<Config> for DetectorConfig {
     }
 }
 
+impl From<Config> for CalibratorConfig {
+    fn from(value: Config) -> Self {
+        CalibratorConfig {
+            num_fields_per_line: value.num_fields_per_line,
+            px_per_field_edge: value.px_per_field_edge,
+            debug_field: value.debug_field,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BoardViewer {
     config: Option<Config>,
@@ -299,12 +309,7 @@ impl BoardViewer {
         self.original_image = Some(frame);
 
         if !self.is_calibrated() {
-            let calibrator_config = CalibratorConfig {
-                num_fields_per_line: self.config.unwrap().num_fields_per_line,
-                px_per_field_edge: self.config.unwrap().px_per_field_edge,
-                debug_field: self.config.unwrap().debug_field,
-            };
-            let calibration_result = try_calibrate(&board, &calibrator_config)?;
+            let calibration_result = try_calibrate(&board, &self.config.unwrap().into())?;
 
             if let Some(calibration_result) = calibration_result {
                 self.set_calibration_data(calibration_result);
@@ -457,6 +462,14 @@ pub fn handle_video_input(video_input: &str, camera_type: Option<CameraType>) ->
     {
         return Err(ImageAcquisitionFailure(None));
     }
+
+    info!("this application relies on a static setup, thus DO NOT MOVE THE CAMERA OR BOARD");
+
+    let ref_pos = reference_positions(&VIEWER.lock().unwrap().config.unwrap().into());
+    info!(
+        "to get started you have to calibrate the setup by placing the following pieces: {}",
+        ref_pos
+    );
 
     loop {
         let mut image = Mat::default();

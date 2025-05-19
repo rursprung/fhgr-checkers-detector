@@ -55,6 +55,22 @@ pub struct ReferencePositions {
     bottom_king: FieldPosition,
 }
 
+impl Display for ReferencePositions {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "top row: man on {}, king on {}, ",
+            self.top_man, self.top_king
+        )?;
+        write!(
+            f,
+            "bottom row: man on {}, king on {}",
+            self.bottom_man, self.bottom_king
+        )?;
+        Ok(())
+    }
+}
+
 pub fn reference_positions(config: &Config) -> ReferencePositions {
     let is_even_number_of_fields = config.num_fields_per_line % 2 == 0;
     let max_col_on_first_row =
