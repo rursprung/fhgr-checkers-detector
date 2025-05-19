@@ -53,6 +53,9 @@ impl std::error::Error for DetectorError {
 
 pub type Result<T> = std::result::Result<T, DetectorError>;
 
+/// Used to filter out unwanted small contours when looking for the stones.
+const MIN_CONTOUR_AREA: usize = 5000;
+
 #[allow(unused)] // depends on feature flags
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash)]
 pub enum DebugFieldConfig {
@@ -78,7 +81,7 @@ pub struct Config {
     /// Defines a fixed length for the edge of a field in the rectified image.
     pub px_per_field_edge: u8,
     /// Whether specific fields should be debugged or not.
-    pub debug_field_config: DebugFieldConfig,
+    pub debug_field: DebugFieldConfig,
 }
 
 impl Config {
@@ -105,15 +108,15 @@ pub enum PieceColour {
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash)]
 pub enum PieceType {
     Man,
-    #[allow(unused)]
     King,
+    Unknown,
 }
 
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash)]
 pub enum FieldOccupancy {
     WrongType,
     Empty,
-    Occupied(PieceColour, PieceType),
+    Occupied(PieceColour, PieceType, u32),
 }
 
 impl Display for FieldOccupancy {
@@ -121,10 +124,10 @@ impl Display for FieldOccupancy {
         match self {
             FieldOccupancy::WrongType => write!(f, " "),
             FieldOccupancy::Empty => write!(f, " "),
-            FieldOccupancy::Occupied(PieceColour::Black, PieceType::Man) => write!(f, "b"),
-            FieldOccupancy::Occupied(PieceColour::Black, PieceType::King) => write!(f, "B"),
-            FieldOccupancy::Occupied(PieceColour::White, PieceType::Man) => write!(f, "w"),
-            FieldOccupancy::Occupied(PieceColour::White, PieceType::King) => write!(f, "W"),
+            FieldOccupancy::Occupied(PieceColour::Black, PieceType::King, _) => write!(f, "B"),
+            FieldOccupancy::Occupied(PieceColour::Black, _, _) => write!(f, "b"),
+            FieldOccupancy::Occupied(PieceColour::White, PieceType::King, _) => write!(f, "W"),
+            FieldOccupancy::Occupied(PieceColour::White, _, _) => write!(f, "w"),
         }
     }
 }
@@ -380,14 +383,18 @@ impl Display for BoardLayout {
 }
 
 #[derive(Debug)]
-struct InitialImageProcessor {
+pub(crate) struct InitialImageProcessor {
     config: Config,
-    calibration_data: CalibrationData,
+    calibration_data: Option<CalibrationData>,
     board_hsv: Mat,
 }
 
 impl InitialImageProcessor {
-    fn new<M>(image: &M, config: Config, calibration_data: CalibrationData) -> Result<Self>
+    pub(crate) fn new<M>(
+        image: &M,
+        config: Config,
+        calibration_data: Option<CalibrationData>,
+    ) -> Result<Self>
     where
         M: MatTrait + ToInputArray,
     {
@@ -462,7 +469,7 @@ impl InitialImageProcessor {
         self.get_mask_for_pieces(&Vec3b::from([0, 0, 100]), &Vec3b::from([120, 150, 170]))
     }
 
-    fn process(self) -> Result<BoardProcessor> {
+    pub(crate) fn process(self) -> Result<BoardProcessor> {
         Ok(BoardProcessor {
             config: self.config,
             calibration_data: self.calibration_data,
@@ -472,9 +479,9 @@ impl InitialImageProcessor {
     }
 }
 
-struct BoardProcessor {
+pub struct BoardProcessor {
     config: Config,
-    calibration_data: CalibrationData,
+    calibration_data: Option<CalibrationData>,
     mask_blacks: Mat,
     mask_whites: Mat,
 }
@@ -512,7 +519,7 @@ impl BoardProcessor {
         let field = mask.roi(mask_region)?;
 
         // debug information
-        if self.config.debug_field_config.matches(&pos) {
+        if self.config.debug_field.matches(&pos) {
             use opencv::{
                 core::Size,
                 highgui::{imshow, wait_key_def},
@@ -557,19 +564,24 @@ impl BoardProcessor {
         };
 
         let height = self.contour_height(self.mask_for(&colour), pos)?;
-        let piece_type = if height > self.king_threshold_height_at_field(&pos)? {
+        let piece_type = if self.calibration_data.is_none() {
+            PieceType::Unknown
+        } else if height > self.king_threshold_height_at_field(&pos)? {
             PieceType::King
         } else {
             PieceType::Man
         };
 
-        Ok(FieldOccupancy::Occupied(colour, piece_type))
+        Ok(FieldOccupancy::Occupied(colour, piece_type, height))
     }
 
     fn king_threshold_height_at_field(&self, pos: &FieldPosition) -> Result<u32> {
         let row = pos.row().map_or_else(|| Err(InvalidPosition), Ok)? as u32;
-        Ok(self.calibration_data.king_threshold_height_on_top_row
-            - (row * self.calibration_data.king_treshold_diff_per_field))
+        Ok(self
+            .calibration_data
+            .unwrap()
+            .king_threshold_height_on_top_row
+            - (row * self.calibration_data.unwrap().king_treshold_diff_per_field))
     }
 
     fn contour_height<M>(&self, mask: &M, pos: &FieldPosition) -> Result<u32>
@@ -587,7 +599,7 @@ impl BoardProcessor {
 
         for contour in contours {
             let area = contour_area_def(&contour)?;
-            if area > self.calibration_data.min_contour_height as f64 {
+            if area > MIN_CONTOUR_AREA as f64 {
                 let all_y = contour.iter().map(|p| p.y).collect::<Vec<_>>();
                 let min_y = all_y.iter().min().unwrap();
                 let max_y = all_y.iter().max().unwrap();
@@ -607,10 +619,47 @@ impl BoardProcessor {
 }
 
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash)]
-struct CalibrationData {
-    king_threshold_height_on_top_row: u32,
-    king_treshold_diff_per_field: u32,
-    min_contour_height: u32,
+pub struct CalibrationData {
+    pub king_threshold_height_on_top_row: u32,
+    pub king_treshold_diff_per_field: u32,
+}
+
+#[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash)]
+pub enum Detector {
+    Uncalibrated(UncalibratedDetector),
+    Calibrated(CalibratedDetector),
+}
+
+impl Detector {
+    pub fn detect_pieces<M>(&self, image: &M) -> Result<BoardLayout>
+    where
+        M: MatTrait + ToInputArray,
+    {
+        match self {
+            Self::Uncalibrated(detector) => detector.detect_pieces(image),
+            Self::Calibrated(detector) => detector.detect_pieces(image),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash)]
+pub struct UncalibratedDetector {
+    config: Config,
+}
+
+impl UncalibratedDetector {
+    pub fn new(config: Config) -> Self {
+        Self { config }
+    }
+
+    pub fn detect_pieces<M>(&self, image: &M) -> Result<BoardLayout>
+    where
+        M: MatTrait + ToInputArray,
+    {
+        let detector = InitialImageProcessor::new(image, self.config, None)?;
+        let detector = detector.process()?;
+        detector.detect_pieces()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash)]
@@ -620,35 +669,20 @@ pub struct CalibratedDetector {
 }
 
 impl CalibratedDetector {
+    pub fn new(config: Config, calibration_data: CalibrationData) -> Self {
+        Self {
+            config,
+            calibration_data,
+        }
+    }
+
     pub fn detect_pieces<M>(&self, image: &M) -> Result<BoardLayout>
     where
         M: MatTrait + ToInputArray,
     {
-        let detector = InitialImageProcessor::new(image, self.config, self.calibration_data)?;
+        let detector = InitialImageProcessor::new(image, self.config, Some(self.calibration_data))?;
         let detector = detector.process()?;
         detector.detect_pieces()
-    }
-}
-
-pub struct Detector {
-    config: Config,
-}
-
-impl Detector {
-    pub fn new(config: Config) -> Self {
-        Self { config }
-    }
-
-    pub fn calibrate(self) -> CalibratedDetector {
-        CalibratedDetector {
-            config: self.config,
-            calibration_data: CalibrationData {
-                // TODO: actually calibrate these things based on an image - this is just manual guesswork!
-                king_threshold_height_on_top_row: 160 + 4 * self.config.num_fields_per_line as u32,
-                king_treshold_diff_per_field: 4,
-                min_contour_height: 5000,
-            },
-        }
     }
 }
 
@@ -705,13 +739,13 @@ mod tests {
         board
             .set(
                 &FieldPosition::try_new(0, 1, num_fields_per_line).unwrap(),
-                FieldOccupancy::Occupied(PieceColour::Black, PieceType::Man),
+                FieldOccupancy::Occupied(PieceColour::Black, PieceType::Man, 100),
             )
             .unwrap();
         board
             .set(
                 &FieldPosition::try_new(1, 0, num_fields_per_line).unwrap(),
-                FieldOccupancy::Occupied(PieceColour::Black, PieceType::King),
+                FieldOccupancy::Occupied(PieceColour::Black, PieceType::King, 200),
             )
             .unwrap();
 
@@ -726,14 +760,14 @@ mod tests {
         assert_eq!(
             (
                 FieldPosition::try_new(0, 1, num_fields_per_line).unwrap(),
-                &FieldOccupancy::Occupied(PieceColour::Black, PieceType::Man)
+                &FieldOccupancy::Occupied(PieceColour::Black, PieceType::Man, 100)
             ),
             fields.next().unwrap()
         );
         assert_eq!(
             (
                 FieldPosition::try_new(1, 0, num_fields_per_line).unwrap(),
-                &FieldOccupancy::Occupied(PieceColour::Black, PieceType::King)
+                &FieldOccupancy::Occupied(PieceColour::Black, PieceType::King, 200)
             ),
             fields.next().unwrap()
         );
@@ -754,13 +788,13 @@ mod tests {
         board
             .set(
                 &FieldPosition::try_new(0, 1, num_fields_per_line).unwrap(),
-                FieldOccupancy::Occupied(PieceColour::Black, PieceType::Man),
+                FieldOccupancy::Occupied(PieceColour::Black, PieceType::Man, 100),
             )
             .unwrap();
         board
             .set(
                 &FieldPosition::try_new(1, 0, num_fields_per_line).unwrap(),
-                FieldOccupancy::Occupied(PieceColour::Black, PieceType::King),
+                FieldOccupancy::Occupied(PieceColour::Black, PieceType::King, 200),
             )
             .unwrap();
 
@@ -770,14 +804,14 @@ mod tests {
         assert_eq!(
             (
                 FieldPosition::try_new(0, 1, num_fields_per_line).unwrap(),
-                &FieldOccupancy::Occupied(PieceColour::Black, PieceType::Man)
+                &FieldOccupancy::Occupied(PieceColour::Black, PieceType::Man, 100)
             ),
             fields.next().unwrap()
         );
         assert_eq!(
             (
                 FieldPosition::try_new(1, 0, num_fields_per_line).unwrap(),
-                &FieldOccupancy::Occupied(PieceColour::Black, PieceType::King)
+                &FieldOccupancy::Occupied(PieceColour::Black, PieceType::King, 200)
             ),
             fields.next().unwrap()
         );

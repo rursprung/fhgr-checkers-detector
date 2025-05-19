@@ -1,17 +1,22 @@
-use Error::*;
-use crate::board_extractor::{extract_board, BoardExtractorError};
+use crate::board_extractor::{BoardExtractorError, extract_board};
+use crate::calibrator::{Config as CalibratorConfig, try_calibrate};
 use crate::camera_control::Esp32Cam;
-use crate::detector::{BoardLayout, CalibratedDetector, FieldOccupancy, FieldPosition};
+use crate::detector::{
+    BoardLayout, CalibratedDetector, Config as DetectorConfig, DebugFieldConfig, Detector,
+    FieldOccupancy, FieldPosition, UncalibratedDetector,
+};
 use crate::util::{field_mask_roi, resize_and_show};
-use crate::{detector, CameraType, PX_PER_FIELD_EDGE};
+use crate::{CameraType, calibrator, detector};
+use Error::*;
 use lazy_static::lazy_static;
 use log::{debug, info, warn};
 use opencv::highgui::wait_key_def;
 use opencv::imgcodecs::imread_def;
+use opencv::imgproc::{FONT_HERSHEY_SIMPLEX, LINE_AA, get_text_size, put_text};
 use opencv::{
     core::{Point2i, Rect2i, Scalar, ToInputOutputArray, mean_std_dev_def},
     highgui::{MouseEventTypes, named_window_def, set_mouse_callback, wait_key},
-    imgproc::{COLOR_RGB2HSV, FONT_HERSHEY_COMPLEX, LINE_8, cvt_color_def, line, put_text_def},
+    imgproc::{COLOR_RGB2HSV, LINE_8, cvt_color_def, line},
     prelude::*,
     videoio::VideoCapture,
 };
@@ -25,6 +30,7 @@ lazy_static! {
 }
 
 const COLOR_GREEN: Scalar = Scalar::new(0.0, 255.0, 0.0, 0.0);
+const COLOR_RED: Scalar = Scalar::new(0.0, 0.0, 255.0, 0.0);
 
 #[derive(Debug)]
 pub enum Error {
@@ -34,6 +40,7 @@ pub enum Error {
     OtherOpenCVError(opencv::Error),
     BoardNotFound,
     InternalDetectionError(detector::DetectorError),
+    CalibrationError(calibrator::Error),
 }
 
 impl Display for Error {
@@ -52,6 +59,7 @@ impl Display for Error {
                 "Board not found in image. Are all aruco markers in view?"
             ),
             InternalDetectionError(_) => write!(f, "internal detection error"),
+            CalibrationError(_) => write!(f, "calibration error"),
         }
     }
 }
@@ -63,6 +71,7 @@ impl std::error::Error for Error {
             ImageAcquisitionFailure(Some(e)) => Some(e),
             OtherOpenCVError(e) => Some(e),
             InternalDetectionError(e) => Some(e),
+            CalibrationError(e) => Some(e),
             _ => None,
         }
     }
@@ -100,12 +109,22 @@ impl From<opencv::Error> for Error {
     }
 }
 
+impl From<calibrator::Error> for Error {
+    fn from(e: calibrator::Error) -> Self {
+        match e {
+            calibrator::Error::InternalDetectionError(e) => InternalDetectionError(e),
+            e => CalibrationError(e),
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash)]
 pub struct Config {
-    num_fields_per_line: u8,
-    px_per_field_edge: u8,
+    pub num_fields_per_line: u8,
+    pub px_per_field_edge: u8,
+    pub debug_field: DebugFieldConfig,
 }
 
 impl Config {
@@ -115,14 +134,24 @@ impl Config {
     }
 
     fn image_edge_length(&self) -> i32 {
-        PX_PER_FIELD_EDGE as i32 * self.num_columns_total() as i32
+        self.px_per_field_edge as i32 * self.num_columns_total() as i32
+    }
+}
+
+impl From<Config> for DetectorConfig {
+    fn from(value: Config) -> Self {
+        DetectorConfig {
+            num_fields_per_line: value.num_fields_per_line,
+            px_per_field_edge: value.px_per_field_edge,
+            debug_field: value.debug_field,
+        }
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct BoardViewer {
     config: Option<Config>,
-    detector: Option<CalibratedDetector>,
+    detector: Option<Detector>,
     original_image: Option<Mat>,
     board: Option<Mat>,
     result: Option<BoardLayout>,
@@ -141,28 +170,27 @@ impl BoardViewer {
         })
     }
 
-    pub fn init(
-        &mut self,
-        detector: CalibratedDetector,
-        num_fields_per_line: u8,
-        px_per_field_edge: u8,
-    ) {
+    pub fn init(&mut self, config: Config) {
         if self.detector.is_some() {
             panic!("Viewer is already initialized!");
         }
 
-        self.detector = Some(detector);
-        self.config = Some(Config {
-            num_fields_per_line,
-            px_per_field_edge,
-        });
+        self.detector = Some(Detector::Uncalibrated(UncalibratedDetector::new(
+            config.into(),
+        )));
+        self.config = Some(config);
+    }
+
+    fn is_calibrated(&self) -> bool {
+        if let Some(Detector::Uncalibrated(_)) = self.detector {
+            false
+        } else {
+            true
+        }
     }
 
     fn handle_mouse_cb(event: i32, x: i32, y: i32, flags: i32) {
-        VIEWER
-            .lock()
-            .unwrap()
-            .handle_mouse(event, x, y, flags);
+        VIEWER.lock().unwrap().handle_mouse(event, x, y, flags);
     }
 
     fn handle_mouse(&self, event: i32, x: i32, y: i32, _flags: i32) {
@@ -176,7 +204,11 @@ impl BoardViewer {
         if event == MouseEventTypes::EVENT_LBUTTONDOWN as i32 {
             if let Some(result) = &self.result {
                 if pos.is_on_board() {
-                    info!("Selected field {}: {}", pos, result.get(&pos).unwrap());
+                    let field = result.get(&pos).unwrap();
+                    #[cfg(feature = "show_debug_screens")]
+                    info!("Selected field {}: {} ({:?})", pos, field, field);
+                    #[cfg(not(feature = "show_debug_screens"))]
+                    info!("Selected field {}: {}", pos, field);
                 }
             }
         }
@@ -243,6 +275,25 @@ impl BoardViewer {
         let board = board.unwrap();
         self.original_image = Some(frame);
 
+        if !self.is_calibrated() {
+            let calibrator_config = CalibratorConfig {
+                num_fields_per_line: self.config.unwrap().num_fields_per_line,
+                px_per_field_edge: self.config.unwrap().px_per_field_edge,
+                debug_field: self.config.unwrap().debug_field,
+            };
+            let calibration_result = try_calibrate(&board, &calibrator_config)?;
+
+            if let Some(calibration_result) = calibration_result {
+                debug!("calibration succeeded: {:?}", calibration_result);
+                self.detector = Some(Detector::Calibrated(CalibratedDetector::new(
+                    self.config.unwrap().into(),
+                    calibration_result,
+                )));
+            } else {
+                debug!("Calibration did not succeed");
+            }
+        }
+
         let result = self.detector.as_ref().unwrap().detect_pieces(&board)?;
 
         let mut board_annotated = Mat::default();
@@ -263,22 +314,50 @@ impl BoardViewer {
     where
         M: MatTrait + ToInputOutputArray,
     {
+        let px_per_field_edge = self.config.unwrap().px_per_field_edge as i32;
+        let font_face = FONT_HERSHEY_SIMPLEX;
+        let font_scale = 3.0;
+        let thickness = 2;
+
         self.overlay_grid(image)?;
 
+        if !self.is_calibrated() {
+            let text = "Calibration ongoing...";
+            let mut baseline = 0;
+            let text_size = get_text_size(text, font_face, font_scale, thickness, &mut baseline)?;
+            put_text(
+                image,
+                text,
+                Point2i::new(
+                    px_per_field_edge + 10,
+                    px_per_field_edge - text_size.height / 2,
+                ),
+                font_face,
+                font_scale,
+                COLOR_RED,
+                thickness,
+                LINE_AA,
+                false,
+            )?;
+        }
+
         for (pos, field) in layout.field_iter() {
-            if let FieldOccupancy::Occupied(_, _) = field {
+            if let FieldOccupancy::Occupied(_, _, _) = field {
                 let text = format!("{}", field);
                 let pos = Point2i::new(
-                    PX_PER_FIELD_EDGE as i32 * pos.col_in_img() as i32 + 10,
-                    PX_PER_FIELD_EDGE as i32 * (pos.row_in_img() as i32 + 1) - 10,
+                    px_per_field_edge * pos.col_in_img() as i32 + 10,
+                    px_per_field_edge * (pos.row_in_img() as i32 + 1) - 10,
                 );
-                put_text_def(
+                put_text(
                     image,
                     text.as_str(),
                     pos,
-                    FONT_HERSHEY_COMPLEX,
-                    3.0,
+                    font_face,
+                    font_scale,
                     COLOR_GREEN,
+                    2,
+                    LINE_AA,
+                    false,
                 )?;
             }
         }
@@ -380,11 +459,8 @@ pub fn handle_video_input(video_input: &str, camera_type: Option<CameraType>) ->
     }
 }
 
-pub fn init_viewer(detector: CalibratedDetector, num_fields_per_line: u8, px_per_field_edge: u8) {
-    VIEWER
-        .lock()
-        .unwrap()
-        .init(detector, num_fields_per_line, px_per_field_edge);
+pub fn init_viewer(config: Config) {
+    VIEWER.lock().unwrap().init(config);
 }
 
 pub fn handle_single_image(image_path: &str) -> Result<()> {

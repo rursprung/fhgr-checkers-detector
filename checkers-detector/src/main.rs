@@ -5,18 +5,18 @@
 #![deny(warnings)]
 #![deny(missing_docs)]
 #![deny(missing_debug_implementations)]
-#![deny(unused)]
 
 mod board_extractor;
+mod calibrator;
 mod camera_control;
 mod detector;
 mod util;
 mod viewer;
 
-use std::error::Error;
-use crate::detector::{Config as DetectorConfig, DebugFieldConfig, Detector};
-use crate::viewer::{handle_single_image, handle_video_input, init_viewer};
+use crate::detector::DebugFieldConfig;
+use crate::viewer::{Config as ViewerConfig, handle_single_image, handle_video_input, init_viewer};
 use clap::Parser;
+use std::error::Error;
 
 /// Defines a fixed length for the edge of a field in the rectified image
 const PX_PER_FIELD_EDGE: u8 = 128;
@@ -82,14 +82,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
     let config = Config::parse();
-
-    let detector = Detector::new(DetectorConfig {
+    let viewer_config = ViewerConfig {
         num_fields_per_line: config.num_fields_per_line,
         px_per_field_edge: PX_PER_FIELD_EDGE,
-        debug_field_config: config.debug_field()?,
-    });
-    let detector = detector.calibrate();
-    init_viewer(detector, config.num_fields_per_line, PX_PER_FIELD_EDGE);
+        debug_field: config.debug_field()?,
+    };
+    init_viewer(viewer_config);
 
     if let Some(ref image_input) = config.input.image_input {
         handle_single_image(image_input.as_str())?;
