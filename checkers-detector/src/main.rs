@@ -258,6 +258,7 @@ impl BoardViewer {
         Ok((mean, std_dev))
     }
 
+    #[allow(unused)]
     fn get_mean_hsv_at_coord(&self, x: i32, y: i32) -> Result<(Scalar, Scalar)> {
         let board_width = self.board.as_ref().unwrap().rows();
         let roi_half_width_px = 20;
@@ -270,6 +271,7 @@ impl BoardViewer {
         self.get_mean_std_dev_hsv_in_roi(roi)
     }
 
+    #[allow(unused)]
     fn get_mean_hsv_at_pos(&self, pos: &FieldPosition) -> Result<(Scalar, Scalar)> {
         let roi = field_mask_roi(pos, PX_PER_FIELD_EDGE);
         self.get_mean_std_dev_hsv_in_roi(roi)

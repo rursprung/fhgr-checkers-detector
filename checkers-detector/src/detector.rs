@@ -4,10 +4,12 @@ use array2d::Array2D;
 use log::{debug, error};
 use opencv::{
     core::{
-        Rect2i, Scalar, Size2i, ToInputArray, Vec3b, bitwise_and_def, count_non_zero, in_range,
+        Point2i, Rect2i, Scalar, Size2i, ToInputArray, Vec3b, Vector, bitwise_and_def,
+        count_non_zero, in_range,
     },
     imgproc::{
-        COLOR_RGB2HSV, MORPH_OPEN, MORPH_RECT, cvt_color_def, get_structuring_element_def,
+        CHAIN_APPROX_SIMPLE, COLOR_RGB2HSV, MORPH_OPEN, MORPH_RECT, RETR_EXTERNAL,
+        contour_area_def, cvt_color_def, find_contours_def, get_structuring_element_def,
         morphology_ex_def,
     },
     prelude::*,
@@ -380,17 +382,22 @@ impl Display for BoardLayout {
 #[derive(Debug)]
 struct InitialImageProcessor {
     config: Config,
+    calibration_data: CalibrationData,
     board_hsv: Mat,
 }
 
 impl InitialImageProcessor {
-    fn new<M>(image: &M, config: Config) -> Result<Self>
+    fn new<M>(image: &M, config: Config, calibration_data: CalibrationData) -> Result<Self>
     where
         M: MatTrait + ToInputArray,
     {
         let mut board_hsv = Mat::default();
         cvt_color_def(image, &mut board_hsv, COLOR_RGB2HSV)?;
-        Ok(Self { config, board_hsv })
+        Ok(Self {
+            config,
+            board_hsv,
+            calibration_data,
+        })
     }
 
     fn get_mask_for_board_area(&self, include_labels: bool) -> Result<Mat> {
@@ -458,6 +465,7 @@ impl InitialImageProcessor {
     fn process(self) -> Result<BoardProcessor> {
         Ok(BoardProcessor {
             config: self.config,
+            calibration_data: self.calibration_data,
             mask_blacks: self.get_mask_for_black_pieces()?,
             mask_whites: self.get_mask_for_white_pieces()?,
         })
@@ -466,6 +474,7 @@ impl InitialImageProcessor {
 
 struct BoardProcessor {
     config: Config,
+    calibration_data: CalibrationData,
     mask_blacks: Mat,
     mask_whites: Mat,
 }
@@ -547,17 +556,66 @@ impl BoardProcessor {
             return Ok(FieldOccupancy::Empty);
         };
 
-        Ok(FieldOccupancy::Occupied(colour, PieceType::Man))
+        let height = self.contour_height(self.mask_for(&colour), pos)?;
+        let piece_type = if height > self.king_threshold_height_at_field(&pos)? {
+            PieceType::King
+        } else {
+            PieceType::Man
+        };
+
+        Ok(FieldOccupancy::Occupied(colour, piece_type))
+    }
+
+    fn king_threshold_height_at_field(&self, pos: &FieldPosition) -> Result<u32> {
+        let row = pos.row().map_or_else(|| Err(InvalidPosition), Ok)? as u32;
+        Ok(self.calibration_data.king_threshold_height_on_top_row
+            - (row * self.calibration_data.king_treshold_diff_per_field))
+    }
+
+    fn contour_height<M>(&self, mask: &M, pos: &FieldPosition) -> Result<u32>
+    where
+        M: MatTrait + ToInputArray,
+    {
+        let field_mask = mask.roi(field_mask_roi(pos, self.config.px_per_field_edge))?;
+        let mut contours = Vector::<Vector<Point2i>>::new();
+        find_contours_def(
+            &field_mask,
+            &mut contours,
+            RETR_EXTERNAL,
+            CHAIN_APPROX_SIMPLE,
+        )?;
+
+        for contour in contours {
+            let area = contour_area_def(&contour)?;
+            if area > self.calibration_data.min_contour_height as f64 {
+                let all_y = contour.iter().map(|p| p.y).collect::<Vec<_>>();
+                let min_y = all_y.iter().min().unwrap();
+                let max_y = all_y.iter().max().unwrap();
+                return Ok((max_y - min_y) as u32);
+            }
+        }
+
+        Ok(0)
+    }
+
+    fn mask_for(&self, piece_colour: &PieceColour) -> &Mat {
+        match piece_colour {
+            PieceColour::Black => &self.mask_blacks,
+            PieceColour::White => &self.mask_whites,
+        }
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash)]
 struct CalibrationData {
-    // TODO: king threshold
+    king_threshold_height_on_top_row: u32,
+    king_treshold_diff_per_field: u32,
+    min_contour_height: u32,
 }
 
 pub struct CalibratedDetector {
     config: Config,
-    _calibration_data: CalibrationData,
+    calibration_data: CalibrationData,
 }
 
 impl CalibratedDetector {
@@ -565,7 +623,7 @@ impl CalibratedDetector {
     where
         M: MatTrait + ToInputArray,
     {
-        let detector = InitialImageProcessor::new(image, self.config)?;
+        let detector = InitialImageProcessor::new(image, self.config, self.calibration_data)?;
         let detector = detector.process()?;
         detector.detect_pieces()
     }
@@ -583,7 +641,12 @@ impl Detector {
     pub fn calibrate(self) -> CalibratedDetector {
         CalibratedDetector {
             config: self.config,
-            _calibration_data: CalibrationData {},
+            calibration_data: CalibrationData {
+                // TODO: actually calibrate these things based on an image - this is just manual guesswork!
+                king_threshold_height_on_top_row: 160 + 4 * self.config.num_fields_per_line as u32,
+                king_treshold_diff_per_field: 4,
+                min_contour_height: 5000,
+            },
         }
     }
 }
