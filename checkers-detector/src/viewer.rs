@@ -16,7 +16,7 @@ use opencv::imgproc::{FONT_HERSHEY_SIMPLEX, LINE_AA, get_text_size, put_text};
 use opencv::{
     core::{Point2i, Rect2i, Scalar, ToInputOutputArray, mean_std_dev_def},
     highgui::{MouseEventTypes, named_window_def, set_mouse_callback, wait_key},
-    imgproc::{COLOR_RGB2HSV, LINE_8, cvt_color_def, line},
+    imgproc::{COLOR_BGR2HSV, LINE_8, cvt_color_def, line},
     prelude::*,
     videoio::VideoCapture,
 };
@@ -255,7 +255,7 @@ impl BoardViewer {
 
     fn get_mean_std_dev_hsv_in_roi(&self, roi: Rect2i) -> Result<(Scalar, Scalar)> {
         let mut board_hsv = Mat::default();
-        cvt_color_def(self.board.as_ref().unwrap(), &mut board_hsv, COLOR_RGB2HSV)?;
+        cvt_color_def(self.board.as_ref().unwrap(), &mut board_hsv, COLOR_BGR2HSV)?;
 
         let mut mean = Scalar::default();
         let mut std_dev = Scalar::default();
