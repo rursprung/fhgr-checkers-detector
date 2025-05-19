@@ -8,14 +8,14 @@ use opencv::{
         count_non_zero, in_range,
     },
     imgproc::{
-        CHAIN_APPROX_SIMPLE, COLOR_RGB2HSV, MORPH_OPEN, MORPH_RECT, RETR_EXTERNAL,
+        CHAIN_APPROX_SIMPLE, COLOR_BGR2HSV, MORPH_CROSS, MORPH_OPEN, RETR_EXTERNAL,
         contour_area_def, cvt_color_def, find_contours_def, get_structuring_element_def,
         morphology_ex_def,
     },
     prelude::*,
 };
-use std::fmt::{Display, Formatter};
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 
 #[derive(Debug)]
 pub enum DetectorError {
@@ -400,7 +400,7 @@ impl InitialImageProcessor {
         M: MatTrait + ToInputArray,
     {
         let mut board_hsv = Mat::default();
-        cvt_color_def(image, &mut board_hsv, COLOR_RGB2HSV)?;
+        cvt_color_def(image, &mut board_hsv, COLOR_BGR2HSV)?;
         Ok(Self {
             config,
             board_hsv,
@@ -441,7 +441,7 @@ impl InitialImageProcessor {
             &mask,
             &mut mask_morph,
             MORPH_OPEN,
-            &get_structuring_element_def(MORPH_RECT, Size2i::new(10, 10))?,
+            &get_structuring_element_def(MORPH_CROSS, Size2i::new(20, 20))?,
         )?;
 
         Ok(mask_morph)
