@@ -452,7 +452,7 @@ impl InitialImageProcessor {
     }
 
     fn get_mask_for_white_pieces(&self) -> Result<Mat> {
-        self.get_mask_for_pieces(&Vec3b::from([0, 0, 100]), &Vec3b::from([50, 150, 255]))
+        self.get_mask_for_pieces(&Vec3b::from([0, 0, 100]), &Vec3b::from([255, 150, 255]))
     }
 
     fn process(self) -> Result<BoardProcessor> {
