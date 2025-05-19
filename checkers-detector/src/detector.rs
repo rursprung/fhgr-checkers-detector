@@ -296,7 +296,6 @@ impl BoardLayout {
         ))
     }
 
-    #[allow(unused)]
     pub fn field_iter(&self) -> impl Iterator<Item = (FieldPosition, &FieldOccupancy)> {
         self.field_pos_iter()
             .map(|pos| (pos, self.get(&pos).unwrap()))

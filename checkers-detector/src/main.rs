@@ -23,15 +23,15 @@ use DetectorError::*;
 use clap::Parser;
 use lazy_static::lazy_static;
 use log::{debug, info, warn};
-use opencv::imgproc::{COLOR_RGB2HSV, cvt_color_def};
 use opencv::{
-    core::{Point2i, Scalar, ToInputOutputArray, mean_def},
+    core::{Point2i, Rect2i, Scalar, ToInputOutputArray, mean_std_dev_def},
     highgui::{MouseEventTypes, named_window_def, set_mouse_callback, wait_key, wait_key_def},
     imgcodecs::imread_def,
-    imgproc::{FONT_HERSHEY_COMPLEX, LINE_8, line, put_text_def},
+    imgproc::{COLOR_RGB2HSV, FONT_HERSHEY_COMPLEX, LINE_8, cvt_color_def, line, put_text_def},
     prelude::*,
     videoio::VideoCapture,
 };
+use std::cmp::{max, min};
 use std::fmt::{Display, Formatter};
 use std::sync::Mutex;
 use url::Url;
@@ -230,19 +230,49 @@ impl BoardViewer {
                 }
             }
         }
+        #[cfg(feature = "show_debug_screens")]
         if event == MouseEventTypes::EVENT_RBUTTONDOWN as i32 {
-            let mean_hsv = self.get_mean_hsv_at_pos(&pos).unwrap();
-            info!("Mean HSV at field {}: {:?}", pos, mean_hsv);
+            let (mean, std_dev) = self.get_mean_hsv_at_pos(&pos).unwrap();
+            info!(
+                "Mean HSV at field {}: mean = {:?}, std_dev = {:?}",
+                pos, mean, std_dev
+            );
+        }
+        #[cfg(feature = "show_debug_screens")]
+        if event == MouseEventTypes::EVENT_MBUTTONDOWN as i32 {
+            let (mean, std_dev) = self.get_mean_hsv_at_coord(x, y).unwrap();
+            info!(
+                "Mean HSV at [{},{}] (in field {}): mean = {:?}, std_dev = {:?}",
+                x, y, pos, mean, std_dev
+            );
         }
     }
 
-    fn get_mean_hsv_at_pos(&self, pos: &FieldPosition) -> Result<Scalar> {
+    fn get_mean_std_dev_hsv_in_roi(&self, roi: Rect2i) -> Result<(Scalar, Scalar)> {
         let mut board_hsv = Mat::default();
         cvt_color_def(self.board.as_ref().unwrap(), &mut board_hsv, COLOR_RGB2HSV)?;
 
-        let roi = field_mask_roi(pos, PX_PER_FIELD_EDGE);
+        let mut mean = Scalar::default();
+        let mut std_dev = Scalar::default();
+        mean_std_dev_def(&board_hsv.roi(roi)?, &mut mean, &mut std_dev)?;
+        Ok((mean, std_dev))
+    }
 
-        mean_def(&board_hsv.roi(roi)?).map_err(OtherOpenCVError)
+    fn get_mean_hsv_at_coord(&self, x: i32, y: i32) -> Result<(Scalar, Scalar)> {
+        let board_width = self.board.as_ref().unwrap().rows();
+        let roi_half_width_px = 20;
+        let roi = Rect2i::new(
+            max(x - roi_half_width_px, 0),
+            max(y - roi_half_width_px, 0),
+            min(x + roi_half_width_px, board_width),
+            min(y + roi_half_width_px, board_width),
+        );
+        self.get_mean_std_dev_hsv_in_roi(roi)
+    }
+
+    fn get_mean_hsv_at_pos(&self, pos: &FieldPosition) -> Result<(Scalar, Scalar)> {
+        let roi = field_mask_roi(pos, PX_PER_FIELD_EDGE);
+        self.get_mean_std_dev_hsv_in_roi(roi)
     }
 
     /// Handle an individual frame.
