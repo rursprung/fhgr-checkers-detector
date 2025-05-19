@@ -354,6 +354,8 @@ fn handle_video_input(config: &Config) -> Result<()> {
             .read(&mut image)
             .map_err(|e| ImageAcquisitionFailure(Some(e)))?;
 
+        resize_and_show("original image", &image)?;
+
         match VIEWER.lock().unwrap().handle_frame(image, config) {
             Ok(_) | Err(BoardNotFound) => {}
             Err(e) => return Err(e),
