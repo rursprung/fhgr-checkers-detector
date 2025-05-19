@@ -15,6 +15,7 @@ use opencv::{
     prelude::*,
 };
 use std::fmt::{Display, Formatter};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug)]
 pub enum DetectorError {
@@ -618,7 +619,7 @@ impl BoardProcessor {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash, Serialize, Deserialize)]
 pub struct CalibrationData {
     pub king_threshold_height_on_top_row: u32,
     pub king_treshold_diff_per_field: u32,

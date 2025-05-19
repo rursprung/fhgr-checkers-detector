@@ -2,8 +2,8 @@ use crate::board_extractor::{BoardExtractorError, extract_board};
 use crate::calibrator::{Config as CalibratorConfig, try_calibrate};
 use crate::camera_control::Esp32Cam;
 use crate::detector::{
-    BoardLayout, CalibratedDetector, Config as DetectorConfig, DebugFieldConfig, Detector,
-    FieldOccupancy, FieldPosition, UncalibratedDetector,
+    BoardLayout, CalibratedDetector, CalibrationData, Config as DetectorConfig, DebugFieldConfig,
+    Detector, FieldOccupancy, FieldPosition, UncalibratedDetector,
 };
 use crate::util::{field_mask_roi, resize_and_show};
 use crate::{CameraType, calibrator, detector};
@@ -22,6 +22,8 @@ use opencv::{
 };
 use std::cmp::{max, min};
 use std::fmt::{Display, Formatter};
+use std::fs;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use url::Url;
 
@@ -41,6 +43,7 @@ pub enum Error {
     BoardNotFound,
     InternalDetectionError(detector::DetectorError),
     CalibrationError(calibrator::Error),
+    SerdeError(serde_json::Error),
 }
 
 impl Display for Error {
@@ -60,6 +63,7 @@ impl Display for Error {
             ),
             InternalDetectionError(_) => write!(f, "internal detection error"),
             CalibrationError(_) => write!(f, "calibration error"),
+            SerdeError(_) => write!(f, "Failed to deserialize the config file for the image"),
         }
     }
 }
@@ -72,6 +76,7 @@ impl std::error::Error for Error {
             OtherOpenCVError(e) => Some(e),
             InternalDetectionError(e) => Some(e),
             CalibrationError(e) => Some(e),
+            SerdeError(e) => Some(e),
             _ => None,
         }
     }
@@ -115,6 +120,12 @@ impl From<calibrator::Error> for Error {
             calibrator::Error::InternalDetectionError(e) => InternalDetectionError(e),
             e => CalibrationError(e),
         }
+    }
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(e: serde_json::Error) -> Self {
+        SerdeError(e)
     }
 }
 
@@ -179,6 +190,18 @@ impl BoardViewer {
             config.into(),
         )));
         self.config = Some(config);
+    }
+
+    pub fn set_calibration_data(&mut self, calibration_data: CalibrationData) {
+        debug!(
+            "swapping detector for calibrated detector with calibration data: {:?}",
+            calibration_data
+        );
+
+        self.detector = Some(Detector::Calibrated(CalibratedDetector::new(
+            self.config.unwrap().into(),
+            calibration_data,
+        )));
     }
 
     fn is_calibrated(&self) -> bool {
@@ -284,11 +307,7 @@ impl BoardViewer {
             let calibration_result = try_calibrate(&board, &calibrator_config)?;
 
             if let Some(calibration_result) = calibration_result {
-                debug!("calibration succeeded: {:?}", calibration_result);
-                self.detector = Some(Detector::Calibrated(CalibratedDetector::new(
-                    self.config.unwrap().into(),
-                    calibration_result,
-                )));
+                self.set_calibration_data(calibration_result);
             } else {
                 debug!("Calibration did not succeed");
             }
@@ -465,6 +484,20 @@ pub fn init_viewer(config: Config) {
 
 pub fn handle_single_image(image_path: &str) -> Result<()> {
     let image = imread_def(image_path).map_err(|e| ImageAcquisitionFailure(Some(e)))?;
+
+    let mut image_path = PathBuf::from(image_path);
+    image_path.set_extension("json");
+    if let Ok(calibration_data) = fs::read_to_string(image_path) {
+        let calibration_data = serde_json::from_str::<CalibrationData>(&calibration_data)?;
+        VIEWER
+            .lock()
+            .unwrap()
+            .set_calibration_data(calibration_data);
+        info!("loaded calibration data from config file");
+    } else {
+        warn!("no calibration data found => kings will not be identified!");
+    }
+
     VIEWER.lock().unwrap().handle_frame(image)?;
     wait_key_def()?;
     Ok(())

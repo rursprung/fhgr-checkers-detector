@@ -18,6 +18,8 @@ log.workspace = true
 env_logger.workspace = true
 array2d.workspace = true
 lazy_static.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [build-dependencies]
 vcpkg = { workspace = true, optional = true }
