@@ -505,7 +505,7 @@ impl BoardProcessor {
 
         for pos in field_positions.iter() {
             let field_occupancy = self.detect_pieces_on_field(&pos)?;
-            debug!("field occupancy at {} is {}", pos, field_occupancy,);
+            debug!("field occupancy at {} is {:?}", pos, field_occupancy);
             result.set(&pos, field_occupancy)?;
         }
 
