@@ -546,19 +546,20 @@ impl BoardProcessor {
     fn detect_pieces_on_field(&self, pos: &FieldPosition) -> Result<FieldOccupancy> {
         let occupancy_blacks = self.occupancy_on_field(&self.mask_blacks, pos)?;
         let occupancy_whites = self.occupancy_on_field(&self.mask_whites, pos)?;
+        
+        let min_occupancy = 0.8;
 
         // can't have both at the same time, otherwise our colour mask is wrong
-        //assert!(occupancy_blacks < 0.5 || occupancy_whites < 0.5);
-        if occupancy_blacks > 0.5 && occupancy_whites > 0.5 {
+        if occupancy_blacks > min_occupancy && occupancy_whites > min_occupancy {
             error!(
-                "encountered occupancy_blacks = {} > 0.5 && occupancy_whites = {} > 0.5 at {}",
-                occupancy_blacks, occupancy_whites, pos
+                "encountered occupancy_blacks = {} > {} && occupancy_whites = {} > {} at {}",
+                occupancy_blacks, min_occupancy, occupancy_whites, min_occupancy, pos
             );
         }
 
-        let colour = if occupancy_blacks > 0.5 {
+        let colour = if occupancy_blacks > min_occupancy {
             PieceColour::Black
-        } else if occupancy_whites > 0.5 {
+        } else if occupancy_whites > min_occupancy {
             PieceColour::White
         } else {
             return Ok(FieldOccupancy::Empty);
