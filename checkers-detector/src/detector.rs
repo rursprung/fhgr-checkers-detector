@@ -582,7 +582,7 @@ impl BoardProcessor {
             .calibration_data
             .unwrap()
             .king_threshold_height_on_top_row
-            - (row * self.calibration_data.unwrap().king_treshold_diff_per_field))
+            - (row * self.calibration_data.unwrap().king_threshold_diff_per_field))
     }
 
     fn contour_height<M>(&self, mask: &M, pos: &FieldPosition) -> Result<u32>
@@ -622,7 +622,7 @@ impl BoardProcessor {
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash, Serialize, Deserialize)]
 pub struct CalibrationData {
     pub king_threshold_height_on_top_row: u32,
-    pub king_treshold_diff_per_field: u32,
+    pub king_threshold_diff_per_field: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialOrd, PartialEq, Ord, Eq, Hash)]

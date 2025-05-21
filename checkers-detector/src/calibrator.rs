@@ -146,13 +146,13 @@ where
     // presume linear distribution
     let king_threshold_height_on_top_row = top_man_height + top_height_diff / 2;
     let king_threshold_height_on_bottom_row = bottom_man_height + bottom_height_diff / 2;
-    let king_treshold_diff_per_field = (king_threshold_height_on_top_row
+    let king_threshold_diff_per_field = (king_threshold_height_on_top_row
         - king_threshold_height_on_bottom_row)
         / config.num_fields_per_line as u32;
 
     Ok(CalibrationData {
         king_threshold_height_on_top_row,
-        king_treshold_diff_per_field,
+        king_threshold_diff_per_field: king_threshold_diff_per_field,
     })
 }
 
