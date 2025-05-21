@@ -50,6 +50,7 @@ const COLOR_WHITE: Scalar = Scalar::new(255.0, 255.0, 255.0, 0.0);
 const COLOR_RED: Scalar = Scalar::new(0.0, 0.0, 255.0, 0.0);
 const COLOR_GREEN: Scalar = Scalar::new(0.0, 255.0, 0.0, 0.0);
 const COLOR_ELECTRIC_BLUE: Scalar = Scalar::new(255.0, 255.0, 128.0, 0.0);
+const COLOR_BLUE: Scalar = Scalar::new(255.0, 0.0, 0.0, 0.0);
 
 fn draw_aruco_marker<M>(marker_id: i32, img_view: &mut M, config: &Config) -> Result<()>
 where
@@ -322,7 +323,7 @@ where
 
     for row in 0..num_fields {
         for col in 0..num_fields {
-            let color = if field_type_a { COLOR_GREEN } else { COLOR_RED };
+            let color = if field_type_a { COLOR_GREEN } else { COLOR_BLUE };
 
             let mut roi = img_view.roi_mut(Rect2i::new(
                 row * field_edge_length_in_px,
