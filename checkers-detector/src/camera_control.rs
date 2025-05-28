@@ -1,11 +1,10 @@
 //! Helpers to init specific cameras (if needed).
 
-#![deny(missing_docs)]
-
 use log::debug;
 use url::Url;
 
 /// Represents an ESP32-CAM.
+#[derive(Debug)]
 pub struct Esp32Cam;
 
 impl Esp32Cam {
