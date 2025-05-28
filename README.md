@@ -99,6 +99,12 @@ otherwise.
 Namely, this includes displaying the masks for the pieces and allow middle and right clicks to print HSV information
 for the specific location.
 
+## License
+
+As this is purely an educational project there's no need for others to include it in their commercial works.
+Accordingly, this is licensed under the **GNU General Public License v3.0 or later** (SPDX: `GPL-3.0-or-later`).
+See [LICENSE](LICENSE) for the full license text.
+
 [FHGR B.Sc. Mobile Robotics]: https://fhgr.ch/mr
 [Ralph Ursprung]: https://github.com/rursprung
 [Checkers]: https://en.wikipedia.org/wiki/Checkers
