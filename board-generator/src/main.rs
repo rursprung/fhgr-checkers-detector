@@ -1,4 +1,4 @@
-use GeneratorError::{InvalidConfig, OpenCVError};
+use Error::{InvalidConfig, OpenCVError};
 use clap::Parser;
 use opencv::{
     core::Size,
@@ -15,18 +15,18 @@ use opencv::{
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug)]
-pub enum GeneratorError {
+pub enum Error {
     OpenCVError(opencv::Error),
     InvalidConfig,
 }
 
-impl From<opencv::Error> for GeneratorError {
+impl From<opencv::Error> for Error {
     fn from(value: opencv::Error) -> Self {
         OpenCVError(value)
     }
 }
 
-impl Display for GeneratorError {
+impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             OpenCVError(_) => write!(f, "OpenCV internal error"),
@@ -35,7 +35,7 @@ impl Display for GeneratorError {
     }
 }
 
-impl std::error::Error for GeneratorError {
+impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             OpenCVError(err) => Some(err),
@@ -44,7 +44,7 @@ impl std::error::Error for GeneratorError {
     }
 }
 
-pub type Result<T> = std::result::Result<T, GeneratorError>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 const COLOR_WHITE: Scalar = Scalar::new(255.0, 255.0, 255.0, 0.0);
 const COLOR_RED: Scalar = Scalar::new(0.0, 0.0, 255.0, 0.0);

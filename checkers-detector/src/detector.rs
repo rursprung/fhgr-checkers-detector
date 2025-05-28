@@ -1,5 +1,5 @@
 use crate::util::field_mask_roi;
-use DetectorError::*;
+use Error::*;
 use array2d::Array2D;
 use log::{debug, error};
 use opencv::{
@@ -18,19 +18,19 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug)]
-pub enum DetectorError {
+pub enum Error {
     OpenCVError(opencv::Error),
     IndexOutOfBounds(usize, usize, usize),
     InvalidPosition,
 }
 
-impl From<opencv::Error> for DetectorError {
+impl From<opencv::Error> for Error {
     fn from(value: opencv::Error) -> Self {
         OpenCVError(value)
     }
 }
 
-impl Display for DetectorError {
+impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             OpenCVError(_) => write!(f, "OpenCV internal error"),
@@ -43,7 +43,7 @@ impl Display for DetectorError {
     }
 }
 
-impl std::error::Error for DetectorError {
+impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             OpenCVError(err) => Some(err),
@@ -52,7 +52,7 @@ impl std::error::Error for DetectorError {
     }
 }
 
-pub type Result<T> = std::result::Result<T, DetectorError>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 /// Used to filter out unwanted small contours when looking for the stones.
 const MIN_CONTOUR_AREA: usize = 5000;

@@ -1,4 +1,4 @@
-use BoardExtractorError::*;
+use Error::*;
 use log::debug;
 use opencv::{
     calib3d::find_homography_ext_def,
@@ -13,17 +13,17 @@ use std::{
 };
 
 #[derive(Debug)]
-pub enum BoardExtractorError {
+pub enum Error {
     OpenCVError(opencv::Error),
 }
 
-impl From<opencv::Error> for BoardExtractorError {
+impl From<opencv::Error> for Error {
     fn from(value: opencv::Error) -> Self {
         OpenCVError(value)
     }
 }
 
-impl Display for BoardExtractorError {
+impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             OpenCVError(_) => write!(f, "OpenCV internal error"),
@@ -31,7 +31,7 @@ impl Display for BoardExtractorError {
     }
 }
 
-impl std::error::Error for BoardExtractorError {
+impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             OpenCVError(err) => Some(err),
@@ -39,7 +39,7 @@ impl std::error::Error for BoardExtractorError {
     }
 }
 
-pub type Result<T> = std::result::Result<T, BoardExtractorError>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Clone)]
 pub struct Config {

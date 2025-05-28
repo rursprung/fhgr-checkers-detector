@@ -1,4 +1,4 @@
-use crate::board_extractor::{BoardExtractorError, extract_board};
+use crate::board_extractor::{Error as BoardExtractorError, extract_board};
 use crate::calibrator::{Config as CalibratorConfig, reference_positions, try_calibrate};
 use crate::camera_control::Esp32Cam;
 use crate::detector::{
@@ -41,7 +41,7 @@ pub enum Error {
     ImageAcquisitionFailure(Option<opencv::Error>),
     OtherOpenCVError(opencv::Error),
     BoardNotFound,
-    InternalDetectionError(detector::DetectorError),
+    InternalDetectionError(detector::Error),
     CalibrationError(calibrator::Error),
     SerdeError(serde_json::Error),
 }
@@ -90,16 +90,16 @@ impl From<url::ParseError> for Error {
 
 impl From<BoardExtractorError> for Error {
     fn from(e: BoardExtractorError) -> Self {
-        use crate::board_extractor::BoardExtractorError::*;
+        use crate::board_extractor::Error::*;
         match e {
             OpenCVError(e) => OtherOpenCVError(e),
         }
     }
 }
 
-impl From<detector::DetectorError> for Error {
-    fn from(e: detector::DetectorError) -> Self {
-        use crate::detector::DetectorError::*;
+impl From<detector::Error> for Error {
+    fn from(e: detector::Error) -> Self {
+        use crate::detector::Error::*;
         match e {
             OpenCVError(e) => OtherOpenCVError(e),
             e => InternalDetectionError(e),

@@ -9,7 +9,7 @@ use std::fmt::{Display, Formatter};
 pub enum Error {
     MissingPieces,
     InvalidPieces,
-    InternalDetectionError(detector::DetectorError),
+    InternalDetectionError(detector::Error),
 }
 
 impl Display for Error {
@@ -25,8 +25,8 @@ impl Display for Error {
     }
 }
 
-impl From<detector::DetectorError> for Error {
-    fn from(e: detector::DetectorError) -> Self {
+impl From<detector::Error> for Error {
+    fn from(e: detector::Error) -> Self {
         InternalDetectionError(e)
     }
 }
