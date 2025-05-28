@@ -45,9 +45,6 @@ be wrong.
 
 Run the application with `--help` or `-h` to see all supported parameters (not all are documented here).
 
-To build and run the project in one go you can replace `./checkers-detector` in the examples below with
-`cargo run --bin checkers-detector --release --` and pass any parameters after the `--`.
-
 The detector shows "b" for black pieces and "w" for white pieces and, once calibrated, the uppercase versions thereof
 to indicate kings.
 
@@ -62,7 +59,7 @@ You can run the application with static images:
 The camera supports a live video feed:
 
 ```bash
-./checkers-detector --video-input http://my-camera-webserver/stream
+cargo run --release --bin checkers-detector --video-input http://my-camera-webserver/stream
 ```
 
 ##### Specific Support for ESP32 CAM
@@ -71,7 +68,7 @@ If you're using an ESP32 CAM with [ESP32 CameraWebServer], explicit support has 
 settings and deduce the stream URL. For this you have to specify the camera type:
 
 ```bash
-./checkers-detector --video-input http://my-esp32-cam/ --camera-type esp32-cam
+cargo run --release --bin checkers-detector --video-input http://my-esp32-cam/ --camera-type esp32-cam
 ```
 
 Support for other camera types can easily be added if needed, as long as they provide a video stream supported by
