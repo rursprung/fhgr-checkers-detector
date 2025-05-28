@@ -323,7 +323,11 @@ where
 
     for row in 0..num_fields {
         for col in 0..num_fields {
-            let color = if field_type_a { COLOR_GREEN } else { COLOR_BLUE };
+            let color = if field_type_a {
+                COLOR_GREEN
+            } else {
+                COLOR_BLUE
+            };
 
             let mut roi = img_view.roi_mut(Rect2i::new(
                 row * field_edge_length_in_px,

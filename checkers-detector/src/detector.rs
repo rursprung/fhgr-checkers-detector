@@ -546,7 +546,7 @@ impl BoardProcessor {
     fn detect_pieces_on_field(&self, pos: &FieldPosition) -> Result<FieldOccupancy> {
         let occupancy_blacks = self.occupancy_on_field(&self.mask_blacks, pos)?;
         let occupancy_whites = self.occupancy_on_field(&self.mask_whites, pos)?;
-        
+
         let min_occupancy = 0.8;
 
         // can't have both at the same time, otherwise our colour mask is wrong
