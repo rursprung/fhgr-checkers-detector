@@ -59,7 +59,7 @@ You can run the application with static images:
 The camera supports a live video feed:
 
 ```bash
-cargo run --release --bin checkers-detector --video-input http://my-camera-webserver/stream
+cargo run --release --bin checkers-detector -- --video-input http://my-camera-webserver/stream
 ```
 
 ##### Specific Support for ESP32 CAM
@@ -68,7 +68,7 @@ If you're using an ESP32 CAM with [ESP32 CameraWebServer], explicit support has 
 settings and deduce the stream URL. For this you have to specify the camera type:
 
 ```bash
-cargo run --release --bin checkers-detector --video-input http://my-esp32-cam/ --camera-type esp32-cam
+cargo run --release --bin checkers-detector -- --video-input http://my-esp32-cam/ --camera-type esp32-cam
 ```
 
 Support for other camera types can easily be added if needed, as long as they provide a video stream supported by
