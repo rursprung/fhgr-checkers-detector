@@ -425,6 +425,19 @@ impl BoardViewer {
 
         Ok(())
     }
+
+    fn print_help(&self) -> Result<()> {
+        if !self.is_calibrated() {
+            let ref_pos = reference_positions(&self.config.unwrap().into());
+            info!(
+                "Calibration ongoing: to get started you have to calibrate the setup by placing the following pieces: {}",
+                ref_pos
+            );
+        }
+        info!("The following keys are available:");
+        info!("\tPress 'q' to quit");
+        Ok(())
+    }
 }
 
 /// Tries to open the specified video input and stream it while it lasts.
@@ -485,9 +498,11 @@ pub fn handle_video_input(video_input: &str, camera_type: Option<CameraType>) ->
         }
 
         let key = wait_key(1)?;
-        if key == 'q' as i32 {
-            return Ok(());
-        }
+        match key as u8 as char {
+            'q' => return Ok(()),
+            'h' => VIEWER.lock().unwrap().print_help()?,
+            _ => {}
+        };
     }
 }
 
